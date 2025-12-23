@@ -1,0 +1,11 @@
+{
+  "name": "h5-chatbot-dify-proxy",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "mysql2": "^3.11.0"
+  },
+  "scripts": {
+    "start": "node server/server.js"
+  }
+}

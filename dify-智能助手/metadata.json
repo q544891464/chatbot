@@ -1,0 +1,6 @@
+
+{
+  "name": "Dify 智能助手",
+  "description": "基于 Dify 框架的移动端 H5 聊天机器人，支持多应用切换与流式响应。",
+  "requestFramePermissions": []
+}
