@@ -96,6 +96,9 @@ body{
   gap:8px;
   justify-self:end;
 }
+.topbar__actions #settingsBtn{
+  display:none;
+}
 
 .iconbtn{
   border: 1px solid var(--border);

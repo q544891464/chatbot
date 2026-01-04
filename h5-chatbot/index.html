@@ -6,7 +6,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="theme-color" content="#f3f4f6" />
-    <title>H5 Chatbot（Dify）</title>
+    <title>智能助手</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -24,8 +24,8 @@
             </svg>
           </div>
           <div class="topbar__title">
-            <div class="topbar__name">Dify 智能助手</div>
-            <div class="topbar__sub" id="connHint">未配置 Dify</div>
+            <div class="topbar__name">智能助手</div>
+            <div class="topbar__sub" id="connHint">未配置平台</div>
           </div>
         </div>
 
@@ -71,7 +71,7 @@
             id="input"
             class="composer__input"
             rows="1"
-            placeholder="输入消息…（回车发送，Shift+回车换行）"
+            placeholder="询问任何问题…"
             autocomplete="off"
             autocapitalize="sentences"
             spellcheck="false"
@@ -107,7 +107,7 @@
       <div class="modal__backdrop" id="settingsBackdrop"></div>
       <div class="modal__sheet" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
         <div class="modal__header">
-          <div class="modal__title" id="settingsTitle">Dify 设置</div>
+          <div class="modal__title" id="settingsTitle">ChatbotAgent 设置</div>
           <button class="iconbtn" id="closeSettingsBtn" type="button">关闭</button>
         </div>
 
@@ -115,37 +115,36 @@
           <label class="field">
             <div class="field__label">对话平台</div>
             <select class="field__input" id="platform">
-              <option value="dify">Dify（默认）</option>
               <option value="agent">ChatbotAgent</option>
             </select>
-            <div class="field__hint">切换平台后可创建新对话分别使用。</div>
+            <div class="field__hint">当前仅支持 ChatbotAgent。</div>
           </label>
 
           <label class="field">
             <div class="field__label">API Base URL</div>
-            <input class="field__input" id="baseUrl" type="text" placeholder="/api 或 https://api.dify.ai/v1" />
-            <div class="field__hint">使用后端代理：填 <code>/api</code> 或 <code>http://localhost:8787/api</code>（推荐）。直连 Dify：填 <code>https://api.dify.ai/v1</code> 或自建 <code>https://your-domain/v1</code>。</div>
+            <input class="field__input" id="baseUrl" type="text" placeholder="/api" />
+            <div class="field__hint">使用后端代理：填 <code>/api</code> 或 <code>http://localhost:8787/api</code>（推荐）。</div>
           </label>
 
-          <label class="field" id="apiKeyField">
+          <label class="field" id="apiKeyField" style="display: none;">
             <div class="field__label">API Key</div>
             <input class="field__input" id="apiKey" type="password" placeholder="app-xxxxxxxxxxxxxxxx" />
-            <div class="field__hint">使用后端代理时可留空；直连 Dify 才需要填写。生产环境建议使用后端代理隐藏 Key。</div>
+            <div class="field__hint">已由后端配置，无需填写。</div>
           </label>
 
           <div class="row">
             <label class="field">
               <div class="field__label">User ID</div>
               <input class="field__input" id="userId" type="text" placeholder="任意字符串" />
-              <div class="field__hint">用于 Dify 侧区分用户，会保存在本机。</div>
+              <div class="field__hint">用于区分用户，会保存在本机。</div>
             </label>
-            <label class="field" id="responseModeField">
+            <label class="field" id="responseModeField" style="display: none;">
               <div class="field__label">响应模式</div>
               <select class="field__input" id="responseMode">
                 <option value="streaming">streaming（推荐）</option>
                 <option value="blocking">blocking</option>
               </select>
-              <div class="field__hint">streaming 会边生成边展示。</div>
+              <div class="field__hint">已固定为 streaming。</div>
             </label>
           </div>
 

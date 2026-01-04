@@ -1,5 +1,13 @@
+import { getLoginUserInfo } from "./platform-bridge.js";
+
 const STORAGE_KEY = "h5ChatbotConfig:v1";
 const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
+const AGENT_ID = "ChatbotAgent";
+const DEFAULT_USER_META = {
+  userName: "test",
+  org: "org1",
+  phone: "1234567890",
+};
 
 const el = {
   connHint: document.getElementById("connHint"),
@@ -81,8 +89,8 @@ function loadConfig() {
   const baseUrl = normalizeBaseUrl(saved?.baseUrl || "/api");
   const apiKey = String(saved?.apiKey || "");
   const userId = String(saved?.userId || randomId("user"));
-  const responseMode = saved?.responseMode === "blocking" ? "blocking" : "streaming";
-  const platform = saved?.platform === "agent" ? "agent" : "dify";
+  const responseMode = "streaming";
+  const platform = "agent";
   return { baseUrl, apiKey, userId, responseMode, platform };
 }
 
@@ -93,10 +101,28 @@ function saveConfig(cfg) {
       baseUrl: normalizeBaseUrl(cfg.baseUrl),
       apiKey: String(cfg.apiKey || ""),
       userId: String(cfg.userId || ""),
-      responseMode: cfg.responseMode === "blocking" ? "blocking" : "streaming",
-      platform: cfg.platform === "agent" ? "agent" : "dify",
+      responseMode: "streaming",
+      platform: "agent",
     }),
   );
+}
+
+// Choose a stable identifier for server-side conversation storage.
+function pickPlatformUserId(userInfo) {
+  if (!userInfo || typeof userInfo !== "object") return "";
+  const candidates = [
+    userInfo.phone,
+    userInfo.mobile,
+    userInfo.userId,
+    userInfo.useId,
+    userInfo.uid,
+    userInfo.id,
+  ];
+  for (const item of candidates) {
+    const value = String(item || "").trim();
+    if (value) return value;
+  }
+  return "";
 }
 
 function deriveTitleFromMessages(messages) {
@@ -109,7 +135,7 @@ function deriveTitleFromMessages(messages) {
 function normalizeConversation(item) {
   const now = Date.now();
   const messages = Array.isArray(item?.messages) ? item.messages : [];
-  const platform = item?.platform === "agent" ? "agent" : "dify";
+  const platform = "agent";
   const title = String(item?.title || "").trim() || deriveTitleFromMessages(messages);
   return {
     id: String(item?.id || randomId("conv")),
@@ -128,7 +154,7 @@ function createConversation(seed) {
     id: randomId("conv"),
     title: seed?.title || "新对话",
     conversationId: seed?.conversationId || "",
-    platform: seed?.platform || "dify",
+    platform: seed?.platform || "agent",
     messages: seed?.messages || [],
     createdAt: now,
     updatedAt: now,
@@ -160,7 +186,7 @@ function serializeConversation(conv) {
     id: String(conv.id || randomId("conv")),
     title: String(conv.title || "新对话"),
     conversationId: String(conv.conversationId || ""),
-    platform: conv.platform === "agent" ? "agent" : "dify",
+    platform: "agent",
     messages: clampMessages(conv.messages || []),
     createdAt: Number(conv.createdAt || Date.now()),
     updatedAt: Number(conv.updatedAt || Date.now()),
@@ -196,13 +222,14 @@ function saveConversations() {
 }
 
 const initialConfig = loadConfig();
-const initialConversation = createConversation({ platform: initialConfig.platform || "dify" });
+const initialConversation = createConversation({ platform: "agent" });
 
 const state = {
   config: initialConfig,
   conversations: [initialConversation],
   activeId: initialConversation.id,
   inFlight: null,
+  platformUser: null,
 };
 
 const IS_MOBILE = (() => {
@@ -210,6 +237,23 @@ const IS_MOBILE = (() => {
   const touch = navigator.maxTouchPoints || 0;
   return /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(ua) || touch > 1;
 })();
+
+// Try to sync userId from the platform SDK before loading conversations.
+async function initPlatformUser() {
+  try {
+    const userInfo = await getLoginUserInfo();
+    state.platformUser = userInfo || null;
+    const userId = pickPlatformUserId(userInfo);
+    if (!userId) return false;
+    if (userId !== state.config.userId) {
+      state.config.userId = userId;
+      saveConfig(state.config);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function initConversations() {
   try {
@@ -234,10 +278,7 @@ async function initConversations() {
 
 function isConfigured(cfg) {
   if (!cfg.userId) return false;
-  if (cfg.platform === "agent") return true;
-  if (!cfg.baseUrl) return false;
-  if (isProxyBaseUrl(cfg.baseUrl)) return true;
-  return Boolean(cfg.apiKey);
+  return true;
 }
 
 function setTips(text) {
@@ -245,34 +286,20 @@ function setTips(text) {
 }
 
 function getPlatformLabel(platform) {
-  return platform === "agent" ? "ChatbotAgent" : "Dify";
+  return "ChatbotAgent";
 }
 
 function getActivePlatform() {
   const conv = getActiveConversation();
-  return conv.platform || state.config.platform || "dify";
+  return conv.platform || "agent";
 }
 
 function setConnHint() {
   if (!isConfigured(state.config)) {
-    el.connHint.textContent = "未配置平台（点“设置”）";
+    el.connHint.textContent = "未配置平台";
     return;
   }
-  const platform = getActivePlatform();
-  if (isProxyBaseUrl(state.config.baseUrl) && !state.config.apiKey) {
-    if (platform === "dify") {
-      el.connHint.textContent = `已连接：Dify（${state.config.responseMode}）`;
-    } else {
-      el.connHint.textContent = `已连接：${getPlatformLabel(platform)}`;
-    }
-    return;
-  }
-  if (platform === "dify") {
-    const modeLabel = state.config.responseMode === "streaming" ? "streaming" : "blocking";
-    el.connHint.textContent = `已连接：Dify（${modeLabel}）`;
-    return;
-  }
-  el.connHint.textContent = `已连接：${getPlatformLabel(platform)}`;
+  el.connHint.textContent = "已连接：ChatbotAgent";
 }
 
 function shouldAutoScroll(container) {
@@ -287,7 +314,7 @@ function scrollToBottom(container) {
 function getActiveConversation() {
   let conv = state.conversations.find((item) => item.id === state.activeId);
   if (!conv) {
-    conv = createConversation({ platform: state.config.platform || "dify" });
+    conv = createConversation({ platform: "agent" });
     state.conversations.unshift(conv);
     state.activeId = conv.id;
     saveConversations();
@@ -688,7 +715,7 @@ function createEmptyStateNode() {
 
   const sub = document.createElement("div");
   sub.className = "empty__sub";
-  sub.textContent = "开始对话吧～你也可以点右上角“设置”切换 Dify 连接方式。";
+  sub.textContent = "开始对话吧～试试询问任何问题。";
 
   card.appendChild(icon);
   card.appendChild(title);
@@ -785,14 +812,14 @@ function renderAll() {
 
 function openSettings() {
   closeChatList();
-  el.baseUrl.value = state.config.baseUrl;
-  el.apiKey.value = state.config.apiKey;
-  el.userId.value = state.config.userId;
-  el.responseMode.value = state.config.responseMode;
-  el.platform.value = state.config.platform || "dify";
+  if (el.baseUrl) el.baseUrl.value = state.config.baseUrl;
+  if (el.apiKey) el.apiKey.value = state.config.apiKey;
+  if (el.userId) el.userId.value = state.config.userId;
+  if (el.responseMode) el.responseMode.value = state.config.responseMode;
+  if (el.platform) el.platform.value = "agent";
   updatePlatformUI();
   el.modal.setAttribute("aria-hidden", "false");
-  setTimeout(() => el.apiKey.focus(), 0);
+  setTimeout(() => el.userId?.focus(), 0);
 }
 
 function closeSettings() {
@@ -805,13 +832,20 @@ function updateTextareaHeight() {
 }
 
 function updatePlatformUI() {
-  const platform = el.platform.value;
-  const isDify = platform === "dify";
-  el.apiKeyField.style.display = isDify ? "" : "none";
-  el.responseModeField.style.display = isDify ? "" : "none";
-  const base = normalizeBaseUrl(el.baseUrl.value);
-  if (!isDify && !isProxyBaseUrl(base)) {
-    el.baseUrl.value = "/api";
+  if (el.platform) {
+    el.platform.value = "agent";
+  }
+  if (el.apiKeyField) {
+    el.apiKeyField.style.display = "none";
+  }
+  if (el.responseModeField) {
+    el.responseModeField.style.display = "none";
+  }
+  if (el.baseUrl) {
+    const base = normalizeBaseUrl(el.baseUrl.value);
+    if (!isProxyBaseUrl(base)) {
+      el.baseUrl.value = "/api";
+    }
   }
 }
 
@@ -852,101 +886,55 @@ function updateVhVar() {
   document.documentElement.style.setProperty("--vh", `${h * 0.01}px`);
 }
 
-async function difyChat({ query, signal, conversationId, onDelta, onMeta }) {
-  const url = `${normalizeBaseUrl(state.config.baseUrl)}/chat-messages`;
-
-  const body = {
-    inputs: {},
-    query,
-    response_mode: state.config.responseMode,
-    conversation_id: conversationId || undefined,
-    user: state.config.userId,
+function getUserMeta() {
+  const info = state.platformUser || {};
+  const userName = String(info.userName || info.name || info.username || "").trim();
+  const org = String(info.org || info.departmentName || info.orgName || "").trim();
+  const phone = String(info.phone || info.mobile || "").trim();
+  return {
+    userName: userName || DEFAULT_USER_META.userName,
+    org: org || DEFAULT_USER_META.org,
+    phone: phone || DEFAULT_USER_META.phone,
   };
+}
 
-  const headers = { "Content-Type": "application/json" };
-  if (!isProxyBaseUrl(state.config.baseUrl)) {
-    headers.Authorization = `Bearer ${state.config.apiKey}`;
-  }
+async function createAgentThread(title) {
+  const url = `${getStoreBase()}/alt-thread`;
+  const payload = {
+    title: String(title || "新对话"),
+    agent_id: AGENT_ID,
+    metadata: getUserMeta(),
+  };
+  console.log("[Chatbot] create thread payload:", payload);
 
   const res = await fetch(url, {
     method: "POST",
-    headers,
-    body: JSON.stringify(body),
-    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`请求失败（${res.status}）：${txt || res.statusText || "Unknown error"}`);
+    throw new Error(`创建对话失败（${res.status}）：${txt || res.statusText || "Unknown error"}`);
   }
 
-  if (state.config.responseMode === "blocking") {
-    const data = await res.json();
-    onDelta?.(String(data?.answer || ""));
-    onMeta?.({ conversationId: data?.conversation_id || "" });
-    return;
+  const data = await res.json().catch(() => ({}));
+  const threadId = String(data?.id || "");
+  if (!threadId) {
+    throw new Error("创建对话失败：未返回对话 ID");
   }
-
-  const reader = res.body?.getReader();
-  if (!reader) throw new Error("当前浏览器不支持 streaming 读取");
-
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-  let lastConversationId = "";
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) >= 0) {
-      const frame = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-
-      const lines = frame.split("\n").filter(Boolean);
-      let eventName = "";
-      const dataLines = [];
-      for (const line of lines) {
-        if (line.startsWith("event:")) eventName = line.slice(6).trim();
-        if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-      }
-
-      const dataRaw = dataLines.join("\n").trim();
-      if (!dataRaw) continue;
-      if (dataRaw === "[DONE]") continue;
-
-      const data = safeJsonParse(dataRaw, null);
-      if (!data) continue;
-
-      const ev = String(data.event || eventName || "");
-      if (ev === "message" || ev === "agent_message") {
-        const chunk = String(data.answer || "");
-        if (chunk) onDelta?.(chunk);
-        if (typeof data.conversation_id === "string") lastConversationId = data.conversation_id;
-      } else if (ev === "message_end" || ev === "agent_message_end") {
-        if (typeof data.conversation_id === "string") lastConversationId = data.conversation_id;
-      } else if (ev === "error") {
-        const msg = String(data.message || "Dify error");
-        throw new Error(msg);
-      }
-    }
-  }
-
-  if (lastConversationId) onMeta?.({ conversationId: lastConversationId });
+  return threadId;
 }
 
-async function agentChat({ query, signal }) {
+async function agentChat({ query, signal, threadId }) {
   const url = `${getStoreBase()}/alt-chat`;
+  const config = { thread_id: threadId || null };
+  const payload = { query, config };
+  console.log("[Chatbot] chat payload:", payload);
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query,
-      config: {},
-      meta: { userId: state.config.userId },
-    }),
+    body: JSON.stringify(payload),
     signal,
   });
 
@@ -959,16 +947,15 @@ async function agentChat({ query, signal }) {
   return { answer: String(data?.answer || data?.message || data?.content || "") };
 }
 
-async function agentChatStream({ query, signal, onDelta }) {
+async function agentChatStream({ query, signal, onDelta, threadId }) {
   const url = `${getStoreBase()}/alt-chat-stream`;
+  const config = { thread_id: threadId || null };
+  const payload = { query, config };
+  console.log("[Chatbot] chat stream payload:", payload);
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query,
-      config: {},
-      meta: { userId: state.config.userId },
-    }),
+    body: JSON.stringify(payload),
     signal,
   });
 
@@ -1035,7 +1022,7 @@ async function sendMessage() {
   if (!text) return;
 
   if (!isConfigured(state.config)) {
-    setTips("请先在“设置”里填写 Dify 配置。");
+    setTips("请先在“设置”里填写配置。");
     openSettings();
     return;
   }
@@ -1052,13 +1039,23 @@ async function sendMessage() {
   }
 
   if (!conv.platform) {
-    conv.platform = state.config.platform || "dify";
+    conv.platform = "agent";
   }
 
   conv.messages.push({ role: "user", content: text, time: nowTime() });
   conv.updatedAt = Date.now();
   if (conv.title === "新对话") {
     conv.title = deriveTitleFromMessages(conv.messages);
+  }
+  if (!conv.conversationId) {
+    try {
+      conv.conversationId = await createAgentThread(conv.title);
+      conv.updatedAt = Date.now();
+      saveConversations();
+      updateConversationList();
+    } catch (err) {
+      setTips(String(err?.message || err));
+    }
   }
   const userNode = createMessageNode(conv.messages[conv.messages.length - 1]);
   el.messages.appendChild(userNode.wrap);
@@ -1079,33 +1076,20 @@ async function sendMessage() {
   setBusy(true);
 
   try {
-    if (conv.platform === "agent") {
-      await agentChatStream({
-        query: text,
-        signal: controller.signal,
-        onDelta: (chunk) => {
-          assistantMsg.content += chunk;
-          setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content);
-          if (autoScroll) scrollToBottom(el.messages);
-          updateScrollButton();
-        },
-      });
-    } else {
-      await difyChat({
-        query: text,
-        signal: controller.signal,
-        conversationId: conv.conversationId,
-        onDelta: (chunk) => {
-          assistantMsg.content += chunk;
-          setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content);
-          if (autoScroll) scrollToBottom(el.messages);
-          updateScrollButton();
-        },
-        onMeta: ({ conversationId }) => {
-          if (conversationId) conv.conversationId = conversationId;
-        },
-      });
+    if (!conv.conversationId) {
+      throw new Error("无法创建对话 ID");
     }
+    await agentChatStream({
+      query: text,
+      signal: controller.signal,
+      threadId: conv.conversationId,
+      onDelta: (chunk) => {
+        assistantMsg.content += chunk;
+        setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content);
+        if (autoScroll) scrollToBottom(el.messages);
+        updateScrollButton();
+      },
+    });
 
     assistantMsg.status = "done";
     assistantNode.meta.querySelector(".msg__spinner")?.remove();
@@ -1139,8 +1123,8 @@ async function sendMessage() {
       updateConversationList();
       setTips(
         isProxyBaseUrl(state.config.baseUrl)
-          ? "请求失败：请检查代理服务是否已启动，以及服务端 DIFY_API_KEY / CORS 配置。"
-          : "请求失败：请检查 Base URL / API Key / CORS。",
+          ? "请求失败：请检查代理服务是否已启动。"
+          : "请求失败：请检查 Base URL / CORS。",
       );
     }
   } finally {
@@ -1194,7 +1178,7 @@ function clearChatWithConfirm() {
 }
 
 function newChat() {
-  const conv = createConversation({ platform: state.config.platform || "dify" });
+  const conv = createConversation({ platform: "agent" });
   state.conversations.unshift(conv);
   state.activeId = conv.id;
   saveConversations();
@@ -1243,20 +1227,20 @@ document.addEventListener("keydown", (e) => {
 el.settingsForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const cfg = {
-    baseUrl: el.baseUrl.value,
-    apiKey: el.apiKey.value,
-    userId: el.userId.value || randomId("user"),
-    responseMode: el.responseMode.value,
-    platform: el.platform.value,
+    baseUrl: el.baseUrl?.value || "/api",
+    apiKey: el.apiKey?.value || "",
+    userId: el.userId?.value || randomId("user"),
+    responseMode: el.responseMode?.value || "streaming",
+    platform: el.platform?.value || "agent",
   };
-  const platform = cfg.platform === "agent" ? "agent" : "dify";
+  const platform = "agent";
   const baseUrl = normalizeBaseUrl(cfg.baseUrl);
-  const finalBaseUrl = platform === "agent" && !isProxyBaseUrl(baseUrl) ? "/api" : baseUrl;
+  const finalBaseUrl = !isProxyBaseUrl(baseUrl) ? "/api" : baseUrl;
   state.config = {
     baseUrl: finalBaseUrl,
     apiKey: String(cfg.apiKey || "").trim(),
     userId: String(cfg.userId || "").trim(),
-    responseMode: cfg.responseMode === "blocking" ? "blocking" : "streaming",
+    responseMode: "streaming",
     platform,
   };
   saveConfig(state.config);
@@ -1309,21 +1293,26 @@ updateVhVar();
 window.visualViewport?.addEventListener("resize", updateVhVar);
 window.addEventListener("resize", updateVhVar);
 
-setConnHint();
-renderAll();
-updateTextareaHeight();
-updateScrollButton();
-updateConversationList();
-initConversations();
-
+el.input.placeholder = "询问任何问题…";
 if (IS_MOBILE) {
-  el.input.placeholder = "输入消息…";
   el.input.setAttribute("enterkeyhint", "done");
 } else {
   el.input.setAttribute("enterkeyhint", "send");
 }
 
-if (!isConfigured(state.config)) {
-  // first visit: guide to settings quickly
-  setTimeout(openSettings, 200);
+async function bootstrap() {
+  await initPlatformUser();
+  setConnHint();
+  renderAll();
+  updateTextareaHeight();
+  updateScrollButton();
+  updateConversationList();
+  await initConversations();
+
+  if (!isConfigured(state.config)) {
+    // first visit: guide to settings quickly
+    setTimeout(openSettings, 200);
+  }
 }
+
+bootstrap();

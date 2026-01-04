@@ -12,6 +12,14 @@ const ALT_API_URL = String(
   process.env.ALT_API_URL || "http://150.223.194.216:5050/api/chat/agent/ChatbotAgent",
 );
 const ALT_API_TOKEN = String(process.env.ALT_API_TOKEN || "");
+const ALT_THREAD_URL = String(process.env.ALT_THREAD_URL || "");
+const ALT_AGENT_ID = String(process.env.ALT_AGENT_ID || "ChatbotAgent");
+const ALT_AUTH_URL = String(process.env.ALT_AUTH_URL || "");
+const ALT_AUTH_USERNAME = String(process.env.ALT_AUTH_USERNAME || "");
+const ALT_AUTH_PASSWORD = String(process.env.ALT_AUTH_PASSWORD || "");
+const ALT_AUTH_SCOPE = String(process.env.ALT_AUTH_SCOPE || "");
+const ALT_AUTH_CLIENT_ID = String(process.env.ALT_AUTH_CLIENT_ID || "");
+const ALT_AUTH_CLIENT_SECRET = String(process.env.ALT_AUTH_CLIENT_SECRET || "");
 const DB_HOST = String(process.env.DB_HOST || "127.0.0.1");
 const DB_PORT = Number.parseInt(process.env.DB_PORT || "3306", 10);
 const DB_USER = String(process.env.DB_USER || "root");
@@ -100,6 +108,89 @@ function normalizeUserPayload(payload) {
   const preferredActive = String(payload?.activeId || "");
   const activeId = items.some((c) => c.id === preferredActive) ? preferredActive : items[0]?.id || "";
   return { items, activeId };
+}
+
+const altTokenCache = { token: "", expMs: 0 };
+let altTokenPromise = null;
+
+function getAltThreadUrl() {
+  if (ALT_THREAD_URL) return ALT_THREAD_URL;
+  const marker = "/api/chat/agent/";
+  const idx = ALT_API_URL.indexOf(marker);
+  if (idx >= 0) {
+    const base = ALT_API_URL.slice(0, idx);
+    return `${base}/api/chat/thread`;
+  }
+  return "";
+}
+
+function parseJwtExp(token) {
+  const parts = String(token || "").split(".");
+  if (parts.length < 2) return 0;
+  const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+  const pad = payload.length % 4 === 0 ? "" : "=".repeat(4 - (payload.length % 4));
+  try {
+    const json = Buffer.from(payload + pad, "base64").toString("utf8");
+    const data = JSON.parse(json);
+    return Number(data?.exp || 0);
+  } catch {
+    return 0;
+  }
+}
+
+function hasValidAltToken() {
+  return altTokenCache.token && Date.now() < altTokenCache.expMs;
+}
+
+async function requestAltToken() {
+  if (!ALT_AUTH_URL || !ALT_AUTH_USERNAME || !ALT_AUTH_PASSWORD) {
+    throw new Error("Missing ALT auth config");
+  }
+  const params = new URLSearchParams();
+  params.set("grant_type", "password");
+  params.set("username", ALT_AUTH_USERNAME);
+  params.set("password", ALT_AUTH_PASSWORD);
+  params.set("scope", ALT_AUTH_SCOPE);
+  params.set("client_id", ALT_AUTH_CLIENT_ID);
+  params.set("client_secret", ALT_AUTH_CLIENT_SECRET);
+
+  const res = await fetch(ALT_AUTH_URL, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params.toString(),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(txt || res.statusText || "ALT token request failed");
+  }
+
+  const data = await res.json().catch(() => ({}));
+  const token = String(data?.access_token || "");
+  if (!token) throw new Error("ALT token missing in response");
+
+  const exp = parseJwtExp(token);
+  altTokenCache.token = token;
+  altTokenCache.expMs = exp ? exp * 1000 - 30_000 : Date.now() + 50 * 60 * 1000;
+  return token;
+}
+
+async function getAltAuthToken() {
+  if (ALT_AUTH_URL) {
+    if (hasValidAltToken()) return altTokenCache.token;
+    if (altTokenPromise) return altTokenPromise;
+    altTokenPromise = requestAltToken().finally(() => {
+      altTokenPromise = null;
+    });
+    return altTokenPromise;
+  }
+  if (!ALT_API_TOKEN) {
+    throw new Error("Missing ALT_API_TOKEN or ALT_AUTH_URL env var on server");
+  }
+  return ALT_API_TOKEN;
 }
 
 async function fetchUserConversations(userKey) {
@@ -460,8 +551,11 @@ async function handleAltChat(req, res) {
     sendJson(res, 500, { error: "Missing ALT_API_URL env var on server" });
     return;
   }
-  if (!ALT_API_TOKEN) {
-    sendJson(res, 500, { error: "Missing ALT_API_TOKEN env var on server" });
+  let token = "";
+  try {
+    token = await getAltAuthToken();
+  } catch (err) {
+    sendJson(res, 500, { error: String(err?.message || err) });
     return;
   }
 
@@ -479,7 +573,7 @@ async function handleAltChat(req, res) {
     method: "POST",
     headers: {
       accept: "application/json",
-      Authorization: `Bearer ${ALT_API_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -514,8 +608,11 @@ async function handleAltChatStream(req, res) {
     sendJson(res, 500, { error: "Missing ALT_API_URL env var on server" });
     return;
   }
-  if (!ALT_API_TOKEN) {
-    sendJson(res, 500, { error: "Missing ALT_API_TOKEN env var on server" });
+  let token = "";
+  try {
+    token = await getAltAuthToken();
+  } catch (err) {
+    sendJson(res, 500, { error: String(err?.message || err) });
     return;
   }
 
@@ -533,7 +630,7 @@ async function handleAltChatStream(req, res) {
     method: "POST",
     headers: {
       accept: "application/json",
-      Authorization: `Bearer ${ALT_API_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
@@ -613,6 +710,52 @@ async function handleAltChatStream(req, res) {
   res.end();
 }
 
+async function handleAltThread(req, res) {
+  const threadUrl = getAltThreadUrl();
+  if (!threadUrl) {
+    sendJson(res, 500, { error: "Missing ALT_THREAD_URL env var on server" });
+    return;
+  }
+
+  let token = "";
+  try {
+    token = await getAltAuthToken();
+  } catch (err) {
+    sendJson(res, 500, { error: String(err?.message || err) });
+    return;
+  }
+
+  const body = await readBodyJson(req);
+  const payload = {
+    title: String(body?.title || "新对话"),
+    agent_id: String(body?.agent_id || ALT_AGENT_ID),
+    metadata: typeof body?.metadata === "object" && body?.metadata ? body.metadata : {},
+  };
+
+  const upstreamRes = await fetch(threadUrl, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    sendJson(res, upstreamRes.status, { error: text || upstreamRes.statusText || "Request failed" });
+    return;
+  }
+
+  try {
+    const data = JSON.parse(text || "{}");
+    sendJson(res, 200, data);
+  } catch {
+    sendJson(res, 200, { raw: text });
+  }
+}
+
 async function handleStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
   let pathname = decodeURIComponent(url.pathname || "/");
@@ -658,7 +801,7 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         difyBaseUrl: DIFY_BASE_URL,
         keyConfigured: Boolean(DIFY_API_KEY),
-        altConfigured: Boolean(ALT_API_TOKEN),
+        altConfigured: Boolean(ALT_API_TOKEN || ALT_AUTH_URL),
       });
       return;
     }
@@ -683,6 +826,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "POST" && url.pathname === "/api/alt-thread") {
+      await handleAltThread(req, res);
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/chat-messages") {
       await handleChatMessages(req, res);
       return;
@@ -701,7 +849,7 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   // eslint-disable-next-line no-console
   console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);
   // eslint-disable-next-line no-console
