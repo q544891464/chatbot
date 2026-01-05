@@ -411,6 +411,8 @@ function renderInlineMarkdown(escapedText) {
   const placeholders = [];
   const token = (i) => `@@MD${i}@@`;
 
+  out = out.replace(/(^|\n)\s*([^\n*]{1,12})\*\*(?=\s*[:：])/g, "$1**$2**");
+
   const pushPlaceholder = (html) => {
     const i = placeholders.length;
     placeholders.push(html);
@@ -469,18 +471,26 @@ function normalizeMarkdownText(text) {
 
 function renderMarkdownLite(text) {
   const src = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const unescaped = src
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t");
+  const normalizedSrc = unescaped.replace(
+    /(^|\n)([^*\n]+?)\s*\*\*(?=\n|$)/g,
+    "$1**$2**",
+  );
   const tokens = [];
 
   const fenceRe = /```([\w-]+)?\n([\s\S]*?)```/g;
   let lastIndex = 0;
   let m;
-  while ((m = fenceRe.exec(src))) {
-    const before = src.slice(lastIndex, m.index);
+  while ((m = fenceRe.exec(normalizedSrc))) {
+    const before = normalizedSrc.slice(lastIndex, m.index);
     if (before) tokens.push({ type: "text", value: before });
     tokens.push({ type: "code", lang: m[1] || "", value: m[2] || "" });
     lastIndex = m.index + m[0].length;
   }
-  const tail = src.slice(lastIndex);
+  const tail = normalizedSrc.slice(lastIndex);
   if (tail) tokens.push({ type: "text", value: tail });
 
   let html = "";

@@ -91,6 +91,9 @@ body{
   overflow: hidden;
   text-overflow: ellipsis;
 }
+#connHint{
+  display: none;
+}
 .topbar__actions{
   display:flex;
   gap:8px;
