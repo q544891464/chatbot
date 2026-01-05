@@ -940,11 +940,11 @@ function createEmptyStateNode() {
 
   const title = document.createElement("div");
   title.className = "empty__title";
-  title.textContent = "你好！我是 AI 助手";
+  title.textContent = "你好！我是 AI 营销助手";
 
   const sub = document.createElement("div");
   sub.className = "empty__sub";
-  sub.textContent = "开始对话吧～试试询问任何问题。";
+  sub.textContent = "开始对话吧～问题描述包括越多关键信息，回答越精准哈！";
 
   card.appendChild(icon);
   card.appendChild(title);
