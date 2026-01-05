@@ -452,6 +452,21 @@ function renderInlineMarkdown(escapedText) {
   return out;
 }
 
+function normalizeMarkdownText(text) {
+  let out = String(text || "");
+  out = out.replace(/([^\n])\s*(#{1,6})\s*(?=\S)/g, "$1\n$2 ");
+  out = out.replace(/([:：。！？!?.])\s*([-*])\s+(?=\S)/g, "$1\n$2 ");
+  out = out.replace(/([:：。！？!?.])\s*(\d+\.)\s+(?=\S)/g, "$1\n$2 ");
+  out = out.replace(/([\u4e00-\u9fff。！？；：，、）\)\]】])\s*-\s*(?=\S)/g, "$1\n- ");
+  out = out.replace(
+    /([\u4e00-\u9fff。！？；：，、）\)\]】])\s*(\d+\.)\s*(?=(\*\*|[\u4e00-\u9fffA-Za-z]))/g,
+    "$1\n$2 ",
+  );
+  out = out.replace(/(\n\s*[-*])(?=\S)/g, "$1 ");
+  out = out.replace(/(\n\s*\d+\.)(?=\S)/g, "$1 ");
+  return out;
+}
+
 function renderMarkdownLite(text) {
   const src = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const tokens = [];
@@ -500,6 +515,174 @@ function renderMarkdownLite(text) {
     return hasIndented;
   };
 
+  const isSeparatorToken = (value) => /^:?-{3,}:?$/.test(String(value || "").trim());
+
+  const isTableSeparatorLine = (line) => {
+    let row = String(line || "").trim();
+    if (!row) return false;
+    if (row.startsWith("|")) row = row.slice(1);
+    if (row.endsWith("|")) row = row.slice(0, -1);
+    const cells = row.split("|").map((cell) => cell.trim());
+    if (!cells.length) return false;
+    return cells.every((cell) => isSeparatorToken(cell));
+  };
+
+  const parseTableRow = (line) => {
+    let row = String(line || "").trim();
+    if (row.startsWith("|")) row = row.slice(1);
+    if (row.endsWith("|")) row = row.slice(0, -1);
+    return row.split("|").map((cell) => cell.trim());
+  };
+
+  const isTableBlock = (block) => {
+    const lines = String(block || "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (lines.length < 2) return false;
+    if (!lines[0].includes("|")) return false;
+    return isTableSeparatorLine(lines[1]);
+  };
+
+  const splitTablesFromBlock = (block) => {
+    const lines = String(block || "").split("\n");
+    const segments = [];
+    let buffer = [];
+
+    const flushBuffer = () => {
+      if (buffer.length) {
+        segments.push(buffer.join("\n"));
+        buffer = [];
+      }
+    };
+
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      if (trimmed && line.includes("|")) {
+        let j = i + 1;
+        while (j < lines.length && !lines[j].trim()) j += 1;
+        if (j < lines.length && isTableSeparatorLine(lines[j])) {
+          flushBuffer();
+          const tableLines = [lines[i], lines[j]];
+          i = j + 1;
+          while (i < lines.length) {
+            const rowLine = lines[i];
+            const rowTrim = rowLine.trim();
+            if (!rowTrim) {
+              i += 1;
+              break;
+            }
+            if (!rowLine.includes("|")) break;
+            tableLines.push(rowLine);
+            i += 1;
+          }
+          segments.push(tableLines.join("\n"));
+          continue;
+        }
+      }
+      buffer.push(line);
+      i += 1;
+    }
+
+    flushBuffer();
+    return segments;
+  };
+
+  const buildMarkdownTable = (header, rows) => {
+    const headerLine = `| ${header.join(" | ")} |`;
+    const sepLine = `| ${header.map(() => "---").join(" | ")} |`;
+    const rowLines = rows.map((row) => `| ${row.join(" | ")} |`);
+    return [headerLine, sepLine, ...rowLines].join("\n");
+  };
+
+  const parseInlineTableLine = (line) => {
+    if (!line.includes("|")) return null;
+    const cleaned = line.replace(/```[a-z0-9-]*/gi, "").replace(/```/g, "").trim();
+    if (!cleaned.includes("|")) return null;
+
+    let tokens = cleaned.split("|").map((item) => item.trim());
+    if (tokens[0] === "") tokens = tokens.slice(1);
+    if (tokens[tokens.length - 1] === "") tokens = tokens.slice(0, -1);
+    if (tokens.length < 4) return null;
+
+    const lowerFirst = String(tokens[0] || "").toLowerCase();
+    if (lowerFirst === "markdown" || lowerFirst === "md") {
+      tokens = tokens.slice(1);
+    }
+    if (tokens.length < 4) return null;
+
+    const parseTokens = (parts, prefixCandidate) => {
+      let sepStart = -1;
+      for (let i = 0; i < parts.length; i++) {
+        if (isSeparatorToken(parts[i])) {
+          sepStart = i;
+          break;
+        }
+      }
+      if (sepStart <= 0) return null;
+
+      let sepEnd = sepStart;
+      while (sepEnd < parts.length && isSeparatorToken(parts[sepEnd])) {
+        sepEnd += 1;
+      }
+
+      const header = parts.slice(0, sepStart);
+      const columnCount = sepEnd - sepStart;
+      if (!columnCount || header.length !== columnCount) return null;
+
+      let prefix = prefixCandidate ? String(prefixCandidate).trim() : "";
+      const firstHeader = header[0] || "";
+      const colonIndex = Math.max(firstHeader.lastIndexOf("："), firstHeader.lastIndexOf(":"));
+      if (colonIndex > -1 && colonIndex < firstHeader.length - 1) {
+        const headPrefix = firstHeader.slice(0, colonIndex + 1).trim();
+        header[0] = firstHeader.slice(colonIndex + 1).trim();
+        prefix = [prefix, headPrefix].filter(Boolean).join(" ");
+      }
+
+      let rest = parts.slice(sepEnd);
+      if (rest.length < columnCount) return null;
+
+      const rows = [];
+      while (rest.length >= columnCount) {
+        rows.push(rest.slice(0, columnCount));
+        rest = rest.slice(columnCount);
+      }
+
+      const suffix = rest.join(" ").trim();
+      return { prefix, table: buildMarkdownTable(header, rows), suffix };
+    };
+
+    const direct = parseTokens(tokens, "");
+    if (direct) return direct;
+
+    const prefixCandidate = tokens[0];
+    const colonHint =
+      prefixCandidate?.includes("：") ||
+      prefixCandidate?.includes(":") ||
+      /表格|资费|如下|如下|如下表|如下为/.test(prefixCandidate || "");
+    if (!colonHint) return null;
+
+    return parseTokens(tokens.slice(1), prefixCandidate);
+  };
+
+  const expandInlineTables = (text) => {
+    const lines = String(text || "").split("\n");
+    const outLines = [];
+    for (const line of lines) {
+      const parsed = parseInlineTableLine(line);
+      if (!parsed) {
+        outLines.push(line);
+        continue;
+      }
+      if (parsed.prefix) outLines.push(parsed.prefix);
+      outLines.push(parsed.table);
+      if (parsed.suffix) outLines.push(parsed.suffix);
+    }
+    return outLines.join("\n");
+  };
+
   for (const t of tokens) {
     if (t.type === "code") {
       const codeEscaped = escapeHtml(t.value);
@@ -507,7 +690,8 @@ function renderMarkdownLite(text) {
       continue;
     }
 
-    const rawBlocks = String(t.value).split(/\n{2,}/);
+    const normalized = expandInlineTables(normalizeMarkdownText(t.value));
+    const rawBlocks = String(normalized).split(/\n{2,}/);
     const blocks = [];
     for (const block of rawBlocks) {
       if (!block.trim()) continue;
@@ -534,7 +718,15 @@ function renderMarkdownLite(text) {
       blocks.push(block);
     }
 
+    const expandedBlocks = [];
     for (const block of blocks) {
+      const segments = splitTablesFromBlock(block);
+      for (const seg of segments) {
+        if (seg.trim()) expandedBlocks.push(seg);
+      }
+    }
+
+    for (const block of expandedBlocks) {
       const trimmed = block.trimEnd();
       if (!trimmed.trim()) continue;
 
@@ -546,7 +738,34 @@ function renderMarkdownLite(text) {
       const isUl = isListBlock(trimmed, false);
       const isOl = isListBlock(trimmed, true);
 
-      if (isUl) {
+      if (isTableBlock(trimmed)) {
+        const tableLines = trimmed
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean);
+        const header = parseTableRow(tableLines[0]);
+        const rows = tableLines.slice(2).map(parseTableRow).filter((row) => row.length);
+        const maxCols = Math.max(
+          header.length,
+          rows.reduce((max, row) => Math.max(max, row.length), 0),
+        );
+        const padRow = (row) => {
+          const next = row.slice(0, maxCols);
+          while (next.length < maxCols) next.push("");
+          return next;
+        };
+        const renderRow = (cells, cellTag) => {
+          const htmlCells = cells.map((cell) => {
+            const content = renderInlineMarkdown(escapeHtml(cell));
+            return `<${cellTag}>${content}</${cellTag}>`;
+          });
+          return `<tr>${htmlCells.join("")}</tr>`;
+        };
+
+        const headerRow = renderRow(padRow(header), "th");
+        const bodyRows = rows.map((row) => renderRow(padRow(row), "td")).join("");
+        html += `<div class="md-table"><table><thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table></div>`;
+      } else if (isUl) {
         html += "<ul>";
         let current = "";
         for (const line of lines) {
@@ -727,6 +946,17 @@ function createEmptyStateNode() {
 function setBubbleContent(bubble, role, content) {
   if (role === "assistant") {
     bubble.classList.add("md");
+    if (!content) {
+      bubble.innerHTML = `
+        <span class="md-typing" aria-live="polite">
+          <span class="md-typing__text">正在思考</span>
+          <span class="md-typing__dot">.</span>
+          <span class="md-typing__dot">.</span>
+          <span class="md-typing__dot">.</span>
+        </span>
+      `;
+      return;
+    }
     bubble.innerHTML = renderMarkdownLite(content || "");
   } else {
     bubble.classList.remove("md");

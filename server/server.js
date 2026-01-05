@@ -420,7 +420,10 @@ function extractAltAnswer(data) {
     data.data?.choices?.[0]?.message?.content,
   ];
   for (const item of candidates) {
-    if (typeof item === "string" && item.trim()) return item;
+    if (typeof item === "string" && item.trim()) {
+      const cleaned = filterAltText({ toolBlock: false, toolDump: false }, item);
+      if (cleaned.trim()) return cleaned;
+    }
   }
   try {
     return JSON.stringify(data);
@@ -429,47 +432,193 @@ function extractAltAnswer(data) {
   }
 }
 
+function stripAltText(text) {
+  let out = String(text || "");
+  if (!out) return "";
+  out = out.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  out = out.replace(/<analysis>[\s\S]*?<\/analysis>/gi, "");
+  out = out.replace(/^\s*(思考|Thought|Reasoning)\s*[:：].*\n?/i, "");
+  return out;
+}
+
+function logAltRawPayload(payload) {
+  if (!payload || typeof payload !== "object") return;
+  try {
+    // eslint-disable-next-line no-console
+    console.log("[ALT RAW]", JSON.stringify(payload));
+  } catch {
+    // eslint-disable-next-line no-console
+    console.log("[ALT RAW]", payload);
+  }
+}
+
+function stripToolBlocks(state, text) {
+  let out = "";
+  let rest = String(text || "");
+  if (!rest) return "";
+
+  while (rest) {
+    if (state.toolBlock) {
+      const endMatch = rest.match(/<\/tool_call[^>]*>/i);
+      if (!endMatch) {
+        return "";
+      }
+      const endIdx = endMatch.index ?? -1;
+      if (endIdx >= 0) {
+        rest = rest.slice(endIdx + endMatch[0].length);
+      } else {
+        return "";
+      }
+      state.toolBlock = false;
+      continue;
+    }
+
+    const startMatch = rest.match(/<tool_call[^>]*>/i);
+    if (!startMatch) {
+      out += rest;
+      break;
+    }
+    const startIdx = startMatch.index ?? -1;
+    if (startIdx > -1) {
+      out += rest.slice(0, startIdx);
+      rest = rest.slice(startIdx + startMatch[0].length);
+      state.toolBlock = true;
+      continue;
+    }
+    break;
+  }
+
+  return out;
+}
+
+function stripToolDump(state, text) {
+  const raw = String(text || "");
+  if (!raw) return "";
+  const lines = raw.split(/\r?\n/);
+  const kept = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const shouldStartDump =
+      /knowledge\s+graph\s+data/i.test(trimmed) ||
+      /document\s+chunks/i.test(trimmed) ||
+      /reference\s+document\s+list/i.test(trimmed);
+
+    if (shouldStartDump) {
+      state.toolDump = true;
+      continue;
+    }
+
+    const isDumpLine =
+      !trimmed ||
+      trimmed.startsWith("```") ||
+      trimmed.startsWith("{") ||
+      trimmed.startsWith("}") ||
+      trimmed.startsWith("[") ||
+      trimmed.startsWith("]") ||
+      /^https?:\/\//i.test(trimmed) ||
+      /^\[\d+\]\s*https?:\/\//i.test(trimmed);
+
+    if (state.toolDump) {
+      if (isDumpLine) {
+        continue;
+      }
+      state.toolDump = false;
+    }
+
+    kept.push(line);
+  }
+
+  return kept.join("\n");
+}
+
+function filterAltText(state, text) {
+  let out = stripAltText(text);
+  out = stripToolBlocks(state, out);
+  out = out.replace(/<\/?tool_call[^>]*>/gi, "");
+  out = out.replace(/<\/?tool[^>]*>/gi, "");
+  out = out.replace(/^\s*tool_call.*$/gim, "");
+  out = stripToolDump(state, out);
+  return out;
+}
+
+function hasToolPayload(payload) {
+  const msg = payload?.msg || {};
+  const toolCalls = msg.tool_calls || payload.tool_calls;
+  const toolChunks = msg.tool_call_chunks || payload.tool_call_chunks;
+  const invalidCalls = msg.invalid_tool_calls || payload.invalid_tool_calls;
+  const extraTools = msg.additional_kwargs?.tool_calls;
+  if (Array.isArray(toolCalls) && toolCalls.length) return true;
+  if (Array.isArray(toolChunks) && toolChunks.length) return true;
+  if (Array.isArray(invalidCalls) && invalidCalls.length) return true;
+  if (Array.isArray(extraTools) && extraTools.length) return true;
+  return false;
+}
+
 function appendAltStream(state, chunk) {
   if (chunk === "") return "";
   if (chunk === state.lastChunk) return "";
 
-  let delta = chunk;
-  if (state.streamedText && chunk.startsWith(state.streamedText)) {
-    delta = chunk.slice(state.streamedText.length);
-    state.streamedText = chunk;
+  let deltaRaw = chunk;
+  if (state.rawStreamedText && chunk.startsWith(state.rawStreamedText)) {
+    deltaRaw = chunk.slice(state.rawStreamedText.length);
+    state.rawStreamedText = chunk;
   } else {
-    state.streamedText += chunk;
+    state.rawStreamedText += chunk;
   }
 
   state.lastChunk = chunk;
+  const delta = filterAltText(state, deltaRaw);
+  if (delta) {
+    state.streamedText += delta;
+  }
   return delta;
 }
 
 function consumeAltPayload(state, payload) {
   if (!payload || typeof payload !== "object") return;
   state.hasParsed = true;
+  if (hasToolPayload(payload)) {
+    return;
+  }
+  if (payload.response === null) {
+    return;
+  }
   state.lastPayload = payload;
 
   const response = typeof payload.response === "string" ? payload.response : "";
   const msgContent = typeof payload.msg?.content === "string" ? payload.msg.content : "";
   const msgType = String(payload.msg?.type || "");
   const status = String(payload.status || "");
+  const role = String(payload.msg?.role || "");
+  const msgTypeLower = msgType.toLowerCase();
 
   const hasChunkHint = msgType.includes("Chunk") || status === "loading";
-  const chunk = msgContent !== "" ? msgContent : response !== "" ? response : "";
-
+  if (
+    msgTypeLower.includes("human") ||
+    msgTypeLower.includes("tool") ||
+    msgTypeLower.includes("function") ||
+    role === "user" ||
+    role === "tool"
+  ) {
+    return;
+  }
+  const rawChunk = msgContent !== "" ? msgContent : response !== "" ? response : "";
   if (hasChunkHint) {
-    appendAltStream(state, chunk);
+    if (!rawChunk) return;
+    appendAltStream(state, rawChunk);
     return;
   }
 
+  const cleaned = filterAltText(state, rawChunk);
+  if (!cleaned) return;
   if (response !== "") {
-    state.finalText = response;
+    state.finalText = cleaned;
     return;
   }
 
   if (msgContent !== "") {
-    state.finalText = msgContent;
+    state.finalText = cleaned;
   }
 }
 
@@ -483,6 +632,7 @@ function tryParseAltLine(state, line) {
 
   try {
     const obj = JSON.parse(text);
+    logAltRawPayload(obj);
     consumeAltPayload(state, obj);
   } catch {
     // ignore non-JSON lines
@@ -500,10 +650,13 @@ async function readAltResponse(upstreamRes) {
   let rawText = "";
   const state = {
     streamedText: "",
+    rawStreamedText: "",
     finalText: "",
     lastPayload: null,
     hasParsed: false,
     lastChunk: "",
+    toolBlock: false,
+    toolDump: false,
   };
 
   while (true) {
@@ -592,14 +745,26 @@ async function handleAltChat(req, res) {
 
 function extractAltChunk(payload) {
   if (!payload || typeof payload !== "object") return null;
+  if (payload.response === null) return null;
   const msgType = String(payload.msg?.type || "");
   const status = String(payload.status || "");
-  if (msgType.toLowerCase().includes("human")) return null;
+  const role = String(payload.msg?.role || "");
+  const msgTypeLower = msgType.toLowerCase();
+  if (
+    msgTypeLower.includes("human") ||
+    msgTypeLower.includes("tool") ||
+    msgTypeLower.includes("function") ||
+    role === "user" ||
+    role === "tool"
+  ) {
+    return null;
+  }
+  if (hasToolPayload(payload)) return null;
   if (!(msgType.includes("Chunk") || status === "loading")) return null;
   const msgContent = typeof payload.msg?.content === "string" ? payload.msg.content : "";
   const response = typeof payload.response === "string" ? payload.response : "";
-  if (msgContent !== "") return msgContent;
-  if (response !== "") return response;
+  const raw = msgContent !== "" ? msgContent : response !== "" ? response : "";
+  if (raw !== "") return raw;
   return null;
 }
 
@@ -662,7 +827,13 @@ async function handleAltChatStream(req, res) {
 
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
-  const state = { streamedText: "", lastChunk: "" };
+  const state = {
+    streamedText: "",
+    rawStreamedText: "",
+    lastChunk: "",
+    toolBlock: false,
+    toolDump: false,
+  };
 
   while (true) {
     const { value, done } = await reader.read();
@@ -677,6 +848,7 @@ async function handleAltChatStream(req, res) {
       if (!text) continue;
       try {
         const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
+        logAltRawPayload(payloadObj);
         const chunk = extractAltChunk(payloadObj);
         if (chunk !== null) {
           const delta = appendAltStream(state, chunk);
@@ -693,6 +865,7 @@ async function handleAltChatStream(req, res) {
   if (buffer.trim()) {
     try {
       const payloadObj = JSON.parse(buffer.startsWith("data:") ? buffer.slice(5).trim() : buffer);
+      logAltRawPayload(payloadObj);
       const chunk = extractAltChunk(payloadObj);
       if (chunk !== null) {
         const delta = appendAltStream(state, chunk);
