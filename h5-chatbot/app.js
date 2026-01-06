@@ -953,21 +953,24 @@ function createEmptyStateNode() {
   return { wrap };
 }
 
-function setBubbleContent(bubble, role, content) {
+function setBubbleContent(bubble, role, content, status) {
   if (role === "assistant") {
     bubble.classList.add("md");
+    const isTyping = status === "typing";
+    const thinkingHtml = `
+      <div class="md-typing md-typing--block" aria-live="polite">
+        <span class="md-typing__text">正在思考</span>
+        <span class="md-typing__dot">.</span>
+        <span class="md-typing__dot">.</span>
+        <span class="md-typing__dot">.</span>
+      </div>
+    `;
     if (!content) {
-      bubble.innerHTML = `
-        <span class="md-typing" aria-live="polite">
-          <span class="md-typing__text">正在思考</span>
-          <span class="md-typing__dot">.</span>
-          <span class="md-typing__dot">.</span>
-          <span class="md-typing__dot">.</span>
-        </span>
-      `;
+      bubble.innerHTML = isTyping ? thinkingHtml : "";
       return;
     }
-    bubble.innerHTML = renderMarkdownLite(content || "");
+    const body = renderMarkdownLite(content || "");
+    bubble.innerHTML = isTyping ? `${body}${thinkingHtml}` : body;
   } else {
     bubble.classList.remove("md");
     bubble.textContent = content || "";
@@ -988,7 +991,7 @@ function createMessageNode({ role, content, time, status }) {
 
   const bubble = document.createElement("div");
   bubble.className = "msg__bubble";
-  setBubbleContent(bubble, role, content || "");
+  setBubbleContent(bubble, role, content || "", status);
 
   const meta = document.createElement("div");
   meta.className = "msg__meta";
@@ -1325,7 +1328,12 @@ async function sendMessage() {
       threadId: conv.conversationId,
       onDelta: (chunk) => {
         assistantMsg.content += chunk;
-        setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content);
+        setBubbleContent(
+          assistantNode.bubble,
+          "assistant",
+          assistantMsg.content,
+          assistantMsg.status,
+        );
         if (autoScroll) scrollToBottom(el.messages);
         updateScrollButton();
       },
@@ -1333,7 +1341,7 @@ async function sendMessage() {
 
     assistantMsg.status = "done";
     assistantNode.meta.querySelector(".msg__spinner")?.remove();
-    setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content);
+    setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content, assistantMsg.status);
     updateScrollButton();
     conv.updatedAt = Date.now();
     if (conv.title === "新对话") {
@@ -1345,7 +1353,7 @@ async function sendMessage() {
     if (err?.name === "AbortError") {
       assistantMsg.status = "done";
       assistantMsg.content = assistantMsg.content || "（已停止）";
-      setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content);
+      setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content, assistantMsg.status);
       assistantNode.meta.querySelector(".msg__spinner")?.remove();
       updateScrollButton();
       conv.updatedAt = Date.now();
@@ -1355,7 +1363,7 @@ async function sendMessage() {
     } else {
       assistantMsg.status = "error";
       assistantMsg.content = assistantMsg.content || `出错：${String(err?.message || err)}`;
-      setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content);
+      setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content, assistantMsg.status);
       assistantNode.meta.querySelector(".msg__spinner")?.remove();
       updateScrollButton();
       conv.updatedAt = Date.now();

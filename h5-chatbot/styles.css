@@ -292,6 +292,10 @@ body{
   color: var(--muted);
   font-size: 14px;
 }
+.md-typing--block{
+  display: flex;
+  margin-top: 6px;
+}
 .md-typing__dot{
   display: inline-block;
   opacity: 0.2;
