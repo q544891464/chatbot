@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
@@ -22,7 +22,7 @@
           </div>
           <div class="topbar__title">
             <div class="topbar__name">AI营销助手</div>
-            <div class="topbar__sub" id="connHint">未配置平�?/div>
+            <div class="topbar__sub" id="connHint">未配置平台</div>
           </div>
         </div>
 
@@ -35,7 +35,7 @@
               />
             </svg>
           </button>
-          <button class="iconbtn iconbtn--icon" id="newChatBtn" type="button" title="新对�? aria-label="新对�?>
+          <button class="iconbtn iconbtn--icon" id="newChatBtn" type="button" title="新对话" aria-label="新对话">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
               <path
                 fill="currentColor"
@@ -56,7 +56,7 @@
 
       <main class="messages" id="messages" role="log" aria-live="polite" aria-relevant="additions text"></main>
 
-      <button class="fab" id="scrollBtn" type="button" aria-label="回到最�? title="回到最�? hidden>
+      <button class="fab" id="scrollBtn" type="button" aria-label="回到最新" title="回到最新" hidden>
         <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
           <path fill="currentColor" d="M12 4a1 1 0 0 1 1 1v11.6l4.3-4.3a1 1 0 1 1 1.4 1.4l-6 6a1 1 0 0 1-1.4 0l-6-6a1 1 0 1 1 1.4-1.4L11 16.6V5a1 1 0 0 1 1-1Z" />
         </svg>
@@ -68,12 +68,12 @@
             id="input"
             class="composer__input"
             rows="1"
-            placeholder="询问任何问题�?
+            placeholder="询问任何问题"
             autocomplete="off"
             autocapitalize="sentences"
             spellcheck="false"
           ></textarea>
-          <button class="composer__send" id="sendBtn" type="button" aria-label="发�? title="发�?>
+          <button class="composer__send" id="sendBtn" type="button" aria-label="发送" title="发送">
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
               <path fill="currentColor" d="M3.4 20.6a1 1 0 0 1-.96-1.3l2.2-6.1a1 1 0 0 1 .9-.65h6.7a1 1 0 1 1 0 2H6.15l-1.4 3.9 14.3-6.4-14.3-6.4 1.4 3.9h6.05a1 1 0 1 1 0 2H5.54a1 1 0 0 1-.94-.65l-2.2-6.1a1 1 0 0 1 1.36-1.26l18 8a1 1 0 0 1 0 1.82l-18 8a1 1 0 0 1-.36.07Z" />
             </svg>
@@ -114,18 +114,18 @@
             <select class="field__input" id="platform">
               <option value="agent">ChatbotAgent</option>
             </select>
-            <div class="field__hint">当前仅支�?ChatbotAgent�?/div>
+            <div class="field__hint">当前仅支持 ChatbotAgent</div>
           </label>
 
           <div class="field">
-            <div class="field__label">已获取用户信息（测试�?/div>
+            <div class="field__label">已获取用户信息（测试）</div>
             <div class="user-info">
               <div class="user-info__row">
                 <span class="user-info__key">姓名</span>
                 <span class="user-info__val" id="userInfoName">-</span>
               </div>
               <div class="user-info__row">
-                <span class="user-info__key">手机�?/span>
+                <span class="user-info__key">手机号</span>
                 <span class="user-info__val" id="userInfoPhone">-</span>
               </div>
               <div class="user-info__row">
@@ -133,14 +133,14 @@
                 <span class="user-info__val" id="userInfoOrg">-</span>
               </div>
             </div>
-            <div class="field__hint">从平�?SDK 获取，未获取时显示默认值�?/div>
+            <div class="field__hint">从平台 SDK 获取，未获取时显示默认值。</div>
           </div>
 
           <div class="field">
             <div class="field__label">认证测试</div>
             <div class="auth-box">
               <div class="auth-box__row">
-                <span class="auth-box__key">授权�?/span>
+                <span class="auth-box__key">授权码</span>
                 <span class="auth-box__val" id="authCodeValue">-</span>
               </div>
               <div class="auth-box__row">
@@ -157,28 +157,28 @@
               </div>
             </div>
             <div class="auth-actions">
-              <button class="btn" type="button" id="authStartBtn">获取授权�?/button>
+              <button class="btn" type="button" id="authStartBtn">获取授权码</button>
             </div>
-            <div class="field__hint">点击后跳转到认证服务器，返回后会展示 code�?/div>
+            <div class="field__hint">点击后跳转到认证服务器，返回后会展示 code。</div>
           </div>
 
           <label class="field">
             <div class="field__label">API Base URL</div>
             <input class="field__input" id="baseUrl" type="text" placeholder="/api" />
-            <div class="field__hint">使用后端代理：填 <code>/api</code> �?<code>http://localhost:8787/api</code>（推荐）�?/div>
+            <div class="field__hint">使用后端代理：填 <code>/api</code> 或 <code>http://localhost:8787/api</code>（推荐）</div>
           </label>
 
           <label class="field" id="apiKeyField" style="display: none;">
             <div class="field__label">API Key</div>
             <input class="field__input" id="apiKey" type="password" placeholder="app-xxxxxxxxxxxxxxxx" />
-            <div class="field__hint">已由后端配置，无需填写�?/div>
+            <div class="field__hint">已由后端配置，无需填写。</div>
           </label>
 
           <div class="row">
             <label class="field">
               <div class="field__label">User ID</div>
-              <input class="field__input" id="userId" type="text" placeholder="任意字符�? />
-              <div class="field__hint">用于区分用户，会保存在本机�?/div>
+              <input class="field__input" id="userId" type="text" placeholder="任意字符串" />
+              <div class="field__hint">用于区分用户，会保存在本地。</div>
             </label>
             <label class="field" id="responseModeField" style="display: none;">
               <div class="field__label">响应模式</div>
@@ -186,7 +186,7 @@
                 <option value="streaming">streaming（推荐）</option>
                 <option value="blocking">blocking</option>
               </select>
-              <div class="field__hint">已固定为 streaming�?/div>
+              <div class="field__hint">已固定为 streaming</div>
             </label>
           </div>
 
@@ -197,7 +197,7 @@
           </div>
 
           <div class="field__hint">
-            如果你打开的是 file:// 方式，部分浏览器会拦截请求；建议用本地静态服务（�?VS Code Live Server）�?
+            如果你打开的是 file:// 方式，部分浏览器会拦截请求；建议用本地静态服务（如 VS Code Live Server）。
           </div>
         </form>
       </div>
@@ -213,4 +213,3 @@
     <script type="module" src="./app.js"></script>
   </body>
 </html>
-

@@ -457,10 +457,29 @@ function renderInlineMarkdown(escapedText) {
     return token(i);
   };
 
-  out = out.replace(/!\[([^\]]*)\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)/g, (_, alt, url) => {
+  const normalizeUrlToken = (raw) => {
+    let url = String(raw || "");
+    if (!url) return url;
+    url = url.replace(/^(&quot;|&#39;|&apos;|["'`<])+/gi, "");
+    url = url.replace(/([>"'`]|&quot;|&#39;|&apos;)+$/gi, "");
+    return url;
+  };
+
+  const renderUrlToken = (raw, altText) => {
+    const url = normalizeUrlToken(raw);
+    if (!url) return raw;
+    if (isImageUrl(url)) {
+      return pushPlaceholder(
+        `<img src="${url}" alt="${altText || "image"}" loading="lazy" decoding="async" />`,
+      );
+    }
     return pushPlaceholder(
-      `<img src="${url}" alt="${alt}" loading="lazy" decoding="async" />`,
+      `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
     );
+  };
+
+  out = out.replace(/!\[([^\]]*)\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)/g, (_, alt, url) => {
+    return renderUrlToken(url, alt);
   });
 
   out = out.replace(/`([^`\n]+)`/g, (_, code) => {
@@ -468,16 +487,15 @@ function renderInlineMarkdown(escapedText) {
   });
 
   out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+    const cleanUrl = normalizeUrlToken(url);
+    if (!cleanUrl) return label;
     return pushPlaceholder(
-      `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`,
+      `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`,
     );
   });
 
   out = out.replace(/(https?:\/\/[^\s<]+[^\s<\.)])/g, (url) => {
-    if (isImageUrl(url)) {
-      return pushPlaceholder(`<img src="${url}" alt="image" loading="lazy" decoding="async" />`);
-    }
-    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`;
+    return renderUrlToken(url);
   });
 
   out = out.replace(/~~([^\n~]+)~~/g, "<del>$1</del>");
@@ -494,6 +512,12 @@ function renderInlineMarkdown(escapedText) {
 
 function normalizeMarkdownText(text) {
   let out = String(text || "");
+  const urls = [];
+  out = out.replace(/https?:\/\/[^\s<]+/g, (match) => {
+    const idx = urls.length;
+    urls.push(match);
+    return `@@URL${idx}@@`;
+  });
   out = out.replace(/([^\n])\s*(#{1,6})\s*(?=\S)/g, "$1\n$2 ");
   out = out.replace(/([:：。！？!?.])\s*([-*])\s+(?=\S)/g, "$1\n$2 ");
   out = out.replace(/([:：。！？!?.])\s*(\d+\.)\s+(?=\S)/g, "$1\n$2 ");
@@ -504,6 +528,9 @@ function normalizeMarkdownText(text) {
   );
   out = out.replace(/(\n\s*[-*])(?=\S)/g, "$1 ");
   out = out.replace(/(\n\s*\d+\.)(?=\S)/g, "$1 ");
+  for (let i = 0; i < urls.length; i++) {
+    out = out.replaceAll(`@@URL${i}@@`, urls[i]);
+  }
   return out;
 }
 

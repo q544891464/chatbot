@@ -595,7 +595,6 @@ function hasToolPayload(payload) {
 
 function appendAltStream(state, chunk) {
   if (chunk === "") return "";
-  if (chunk === state.lastChunk) return "";
 
   let deltaRaw = chunk;
   if (state.rawStreamedText && chunk.startsWith(state.rawStreamedText)) {
