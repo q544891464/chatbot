@@ -58,15 +58,21 @@ body{
   min-width: 0;
 }
 .topbar__logo{
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   border-radius: 8px;
   display:flex;
   align-items:center;
   justify-content:center;
-  color: white;
-  background: linear-gradient(135deg, rgba(37,99,235,1), rgba(59,130,246,1));
-  box-shadow: 0 8px 18px rgba(37,99,235,0.25);
+  overflow: hidden;
+  background: transparent;
+  box-shadow: 0 8px 18px rgba(17,24,39,0.12);
+}
+.topbar__logo img{
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 .topbar__title{
   display:flex;
@@ -100,7 +106,7 @@ body{
   justify-self:end;
 }
 .topbar__actions #settingsBtn{
-  display:none;
+  display:inline-flex;
 }
 
 .iconbtn{
@@ -159,6 +165,12 @@ body{
   border: 1px solid rgba(37,99,235,0.18);
   color: rgba(37,99,235,0.95);
 }
+.empty__icon img{
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  display: block;
+}
 .empty__title{
   font-weight: 800;
   color: #374151;
@@ -189,13 +201,18 @@ body{
   justify-content:center;
   font-weight: 900;
   font-size: 12px;
-  color: white;
-  background: linear-gradient(135deg, rgba(37,99,235,0.95), rgba(59,130,246,0.85));
-  box-shadow: 0 10px 22px rgba(37,99,235,0.18);
+  color: transparent;
+  background-color: #f3f4f6;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  box-shadow: 0 10px 22px rgba(17,24,39,0.10);
 }
-.msg--user .msg__avatar{
-  background: linear-gradient(135deg, rgba(59,130,246,0.65), rgba(37,99,235,0.65));
-  box-shadow: 0 10px 22px rgba(37,99,235,0.10);
+.msg__avatar--assistant{
+  background-image: url("./static/机器人logo.png");
+}
+.msg__avatar--user{
+  background-image: url("./static/用户logo.png");
 }
 .msg__content{
   display:flex;
@@ -619,6 +636,61 @@ body{
   font-size: 12px;
   color: var(--muted);
   line-height: 1.4;
+}
+.user-info{
+  border: 1px solid rgba(229,231,235,0.9);
+  background: rgba(249,250,251,0.9);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.user-info__row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.user-info__key{
+  font-size: 12px;
+  color: rgba(55,65,81,0.8);
+}
+.user-info__val{
+  font-size: 13px;
+  color: #111827;
+  font-weight: 700;
+  word-break: break-all;
+}
+.auth-box{
+  border: 1px dashed rgba(229,231,235,0.9);
+  background: rgba(255,255,255,0.85);
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.auth-box__row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.auth-box__key{
+  font-size: 12px;
+  color: rgba(55,65,81,0.8);
+}
+.auth-box__val{
+  font-size: 13px;
+  color: #111827;
+  font-weight: 700;
+  word-break: break-all;
+}
+.auth-actions{
+  margin-top: 8px;
+  display: flex;
+  gap: 10px;
 }
 .field__hint code{
   padding: 1px 6px;

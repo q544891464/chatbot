@@ -2,6 +2,7 @@ import { getLoginUserInfo } from "./platform-bridge.js";
 
 const STORAGE_KEY = "h5ChatbotConfig:v1";
 const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
+const AUTH_STORAGE_KEY = "h5ChatbotAuth:v1";
 const AGENT_ID = "ChatbotAgent";
 const DEFAULT_USER_META = {
   userName: "test",
@@ -41,6 +42,14 @@ const el = {
   platform: document.getElementById("platform"),
   apiKeyField: document.getElementById("apiKeyField"),
   responseModeField: document.getElementById("responseModeField"),
+  userInfoName: document.getElementById("userInfoName"),
+  userInfoPhone: document.getElementById("userInfoPhone"),
+  userInfoOrg: document.getElementById("userInfoOrg"),
+  authStartBtn: document.getElementById("authStartBtn"),
+  authCodeValue: document.getElementById("authCodeValue"),
+  authStateValue: document.getElementById("authStateValue"),
+  authAccessTokenValue: document.getElementById("authAccessTokenValue"),
+  authRefreshTokenValue: document.getElementById("authRefreshTokenValue"),
 
   imageViewer: document.getElementById("imageViewer"),
   imageViewerBackdrop: document.getElementById("imageViewerBackdrop"),
@@ -66,6 +75,33 @@ function safeJsonParse(raw, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function loadAuthState() {
+  return safeJsonParse(localStorage.getItem(AUTH_STORAGE_KEY) || "null", {
+    code: "",
+    state: "",
+    accessToken: "",
+    refreshToken: "",
+    tokenType: "",
+    expiresIn: 0,
+    receivedAt: 0,
+  });
+}
+
+function saveAuthState(payload) {
+  localStorage.setItem(
+    AUTH_STORAGE_KEY,
+    JSON.stringify({
+      code: String(payload?.code || ""),
+      state: String(payload?.state || ""),
+      accessToken: String(payload?.accessToken || ""),
+      refreshToken: String(payload?.refreshToken || ""),
+      tokenType: String(payload?.tokenType || ""),
+      expiresIn: Number(payload?.expiresIn || 0),
+      receivedAt: Number(payload?.receivedAt || 0),
+    }),
+  );
 }
 
 function normalizeBaseUrl(input) {
@@ -230,6 +266,7 @@ const state = {
   activeId: initialConversation.id,
   inFlight: null,
   platformUser: null,
+  auth: loadAuthState(),
 };
 
 const IS_MOBILE = (() => {
@@ -249,6 +286,7 @@ async function initPlatformUser() {
       state.config.userId = userId;
       saveConfig(state.config);
     }
+    updateUserInfoDisplay();
     return true;
   } catch {
     return false;
@@ -932,11 +970,7 @@ function createEmptyStateNode() {
 
   const icon = document.createElement("div");
   icon.className = "empty__icon";
-  icon.innerHTML = `
-    <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true" focusable="false">
-      <path fill="currentColor" d="M12 2a1 1 0 0 1 .94.66l1.1 3.13a9.2 9.2 0 0 1 3.1 1.8l3.14-1.1a1 1 0 0 1 1.24.55l.02.05a1 1 0 0 1-.26 1.1l-2.44 2.26c.34.97.52 1.98.54 3.02l2.73 1.2a1 1 0 0 1 .48 1.3l-.02.05a1 1 0 0 1-1 .63l-3.32-.23a9.24 9.24 0 0 1-2.13 2.47l.72 3.25a1 1 0 0 1-.7 1.18l-.05.01a1 1 0 0 1-1.09-.38L12 20.5l-2.46 2.29a1 1 0 0 1-1.09.38l-.05-.01a1 1 0 0 1-.7-1.18l.72-3.25a9.24 9.24 0 0 1-2.13-2.47l-3.32.23a1 1 0 0 1-1-.63l-.02-.05a1 1 0 0 1 .48-1.3l2.73-1.2c.02-1.04.2-2.05.54-3.02L3.24 8.19A1 1 0 0 1 2.98 7.1l.02-.05a1 1 0 0 1 1.24-.55l3.14 1.1a9.2 9.2 0 0 1 3.1-1.8l1.1-3.13A1 1 0 0 1 12 2Zm0 6.2a3.8 3.8 0 1 0 0 7.6 3.8 3.8 0 0 0 0-7.6Z" />
-    </svg>
-  `;
+  icon.innerHTML = `<img src="./static/AIlogo.png" alt="AI营销助手" />`;
 
   const title = document.createElement("div");
   title.className = "empty__title";
@@ -982,8 +1016,8 @@ function createMessageNode({ role, content, time, status }) {
   wrap.className = `msg ${role === "user" ? "msg--user" : "msg--assistant"}`;
 
   const avatar = document.createElement("div");
-  avatar.className = "msg__avatar";
-  avatar.textContent = role === "user" ? "你" : "AI";
+  avatar.className = `msg__avatar ${role === "user" ? "msg__avatar--user" : "msg__avatar--assistant"}`;
+  avatar.textContent = "";
   avatar.setAttribute("aria-hidden", "true");
 
   const contentWrap = document.createElement("div");
@@ -1061,6 +1095,8 @@ function openSettings() {
   if (el.responseMode) el.responseMode.value = state.config.responseMode;
   if (el.platform) el.platform.value = "agent";
   updatePlatformUI();
+  updateUserInfoDisplay();
+  updateAuthDisplay();
   el.modal.setAttribute("aria-hidden", "false");
   setTimeout(() => el.userId?.focus(), 0);
 }
@@ -1139,6 +1175,251 @@ function getUserMeta() {
     org: org || DEFAULT_USER_META.org,
     phone: phone || DEFAULT_USER_META.phone,
   };
+}
+
+function updateUserInfoDisplay() {
+  if (!el.userInfoName && !el.userInfoPhone && !el.userInfoOrg) return;
+  const info = state.platformUser || {};
+  const nameRaw = String(info.userName || info.name || info.username || "").trim();
+  const orgRaw = String(info.org || info.departmentName || info.orgName || "").trim();
+  const phoneRaw = String(info.phone || info.mobile || "").trim();
+
+  const nameText = nameRaw || `${DEFAULT_USER_META.userName}（默认）`;
+  const orgText = orgRaw || `${DEFAULT_USER_META.org}（默认）`;
+  const phoneText = phoneRaw || `${DEFAULT_USER_META.phone}（默认）`;
+
+  if (el.userInfoName) el.userInfoName.textContent = nameText;
+  if (el.userInfoOrg) el.userInfoOrg.textContent = orgText;
+  if (el.userInfoPhone) el.userInfoPhone.textContent = phoneText;
+}
+
+function updateAuthDisplay() {
+  if (
+    !el.authCodeValue &&
+    !el.authStateValue &&
+    !el.authAccessTokenValue &&
+    !el.authRefreshTokenValue
+  ) {
+    return;
+  }
+  const auth = state.auth || {
+    code: "",
+    state: "",
+    accessToken: "",
+    refreshToken: "",
+    tokenType: "",
+    expiresIn: 0,
+    receivedAt: 0,
+  };
+  const codeText = auth.code ? auth.code : "-";
+  const stateText = auth.state ? auth.state : "-";
+  const accessText = auth.accessToken ? auth.accessToken : "-";
+  const refreshText = auth.refreshToken ? auth.refreshToken : "-";
+  if (el.authCodeValue) el.authCodeValue.textContent = codeText;
+  if (el.authStateValue) el.authStateValue.textContent = stateText;
+  if (el.authAccessTokenValue) el.authAccessTokenValue.textContent = accessText;
+  if (el.authRefreshTokenValue) el.authRefreshTokenValue.textContent = refreshText;
+}
+
+async function fetchAuthConfig() {
+  const url = `${getStoreBase()}/auth-config`;
+  const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(txt || res.statusText || "auth config failed");
+  }
+  return res.json().catch(() => ({}));
+}
+
+async function exchangeAuthToken(code, redirectUri) {
+  const url = `${getStoreBase()}/auth-token`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code, redirectUri }),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(txt || res.statusText || "token request failed");
+  }
+  return res.json().catch(() => ({}));
+}
+
+async function fetchAuthUserInfo(accessToken) {
+  const url = `${getStoreBase()}/auth-userinfo`;
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  const text = await res.text().catch(() => "");
+  let data = null;
+  try {
+    data = JSON.parse(text || "{}");
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: res.status,
+      errorCode: data?.errorCode ?? null,
+      message: data?.error || text || res.statusText || "userinfo request failed",
+      data,
+    };
+  }
+  return { ok: true, status: res.status, data };
+}
+
+function applyUserInfoFromResponse(userInfo) {
+  const name = String(userInfo?.name || "").trim();
+  const phone = String(userInfo?.phone_number || "").trim();
+  const org = String(userInfo?.orgName || "").trim();
+  state.platformUser = {
+    userName: name,
+    phone,
+    org,
+    raw: userInfo || {},
+  };
+  updateUserInfoDisplay();
+  if (phone) {
+    state.config.userId = phone;
+    saveConfig(state.config);
+    updateConversationList();
+  }
+}
+
+async function tryLoginWithStoredToken() {
+  const accessToken = String(state.auth?.accessToken || "");
+  if (!accessToken) {
+    return { ok: false, needsAuth: false, reason: "missing_token" };
+  }
+  const result = await fetchAuthUserInfo(accessToken);
+  if (result.ok) {
+    applyUserInfoFromResponse(result.data || {});
+    return { ok: true, needsAuth: false };
+  }
+  if (result.status !== 200 && result.errorCode === 10011) {
+    return { ok: false, needsAuth: true, reason: "token_expired" };
+  }
+  setTips(`获取用户信息失败：${String(result.message || "")}`);
+  return { ok: false, needsAuth: false, reason: "other_error" };
+}
+
+async function startAuthFlow() {
+  try {
+    const cfg = await fetchAuthConfig();
+    const authorizeUrlBase = String(cfg?.authorizeUrlBase || "").trim();
+    const clientId = String(cfg?.clientId || "").trim();
+    const redirectUri = String(cfg?.redirectUri || "").trim();
+    const scope = String(cfg?.scope || "").trim();
+
+    if (!authorizeUrlBase || !clientId || !redirectUri || !scope) {
+      setTips("认证配置不完整，请检查环境变量。");
+      return;
+    }
+
+  const stateValue = `state-${Date.now().toString(36)}-${Math.random()
+    .toString(16)
+    .slice(2, 10)}`;
+  state.auth = {
+    code: "",
+    state: stateValue,
+    accessToken: "",
+    refreshToken: "",
+    tokenType: "",
+    expiresIn: 0,
+    receivedAt: 0,
+  };
+    saveAuthState(state.auth);
+    updateAuthDisplay();
+
+    const url = new URL(authorizeUrlBase);
+    url.searchParams.set("client_id", clientId);
+    url.searchParams.set("redirect_uri", redirectUri);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("scope", scope);
+    url.searchParams.set("state", stateValue);
+    window.location.href = url.toString();
+  } catch (err) {
+    setTips(`认证失败：${String(err?.message || err)}`);
+  }
+}
+
+function captureAuthCodeFromUrl() {
+  const params = new URLSearchParams(window.location.search || "");
+  const code = params.get("code");
+  const returnedState = params.get("state");
+  if (!code) return false;
+
+  const expectedState = String(state.auth?.state || "");
+  if (expectedState && returnedState && expectedState !== returnedState) {
+    // eslint-disable-next-line no-console
+    console.warn("[Auth] state mismatch", { expectedState, returnedState });
+    state.auth = {
+      ...state.auth,
+      code: "",
+      state: "",
+      receivedAt: 0,
+    };
+    saveAuthState(state.auth);
+    updateAuthDisplay();
+    return false;
+  }
+
+  state.auth = {
+    ...state.auth,
+    code,
+    state: returnedState || expectedState || "",
+    receivedAt: Date.now(),
+  };
+
+  const cleanUrl = `${window.location.pathname}${window.location.hash || ""}`;
+  window.history.replaceState({}, "", cleanUrl);
+
+  fetchAuthConfig()
+    .then((cfg) => String(cfg?.redirectUri || "").trim())
+    .then((redirectUri) => exchangeAuthToken(code, redirectUri))
+    .then((data) => {
+      const accessToken = String(data?.access_token || "");
+      const refreshToken = String(data?.refresh_token || "");
+      state.auth = {
+        ...state.auth,
+        accessToken,
+        refreshToken,
+        tokenType: String(data?.token_type || ""),
+        expiresIn: Number(data?.expires_in || 0),
+        receivedAt: Date.now(),
+      };
+      saveAuthState(state.auth);
+      updateAuthDisplay();
+      if (!accessToken) {
+        throw new Error("empty access_token");
+      }
+      return fetchAuthUserInfo(accessToken).then((result) => {
+        if (!result.ok) {
+          throw new Error(`userinfo:${String(result.message || "failed")}`);
+        }
+        return result.data || {};
+      });
+    })
+    .then((userInfo) => {
+      applyUserInfoFromResponse(userInfo);
+    })
+    .catch((err) => {
+      const message = String(err?.message || err);
+      if (message.startsWith("userinfo:")) {
+        setTips(`获取用户信息失败：${message.slice("userinfo:".length)}`);
+      } else {
+        setTips(`换取 token 失败：${message}`);
+      }
+      updateAuthDisplay();
+    });
+
+  saveAuthState(state.auth);
+  updateAuthDisplay();
+  return true;
 }
 
 async function createAgentThread(title) {
@@ -1462,6 +1743,7 @@ el.input.addEventListener("keydown", (e) => {
 });
 
 el.settingsBtn.addEventListener("click", openSettings);
+el.authStartBtn?.addEventListener("click", startAuthFlow);
 el.closeSettingsBtn.addEventListener("click", closeSettings);
 el.backdrop.addEventListener("click", closeSettings);
 document.addEventListener("keydown", (e) => {
@@ -1550,11 +1832,22 @@ if (IS_MOBILE) {
 
 async function bootstrap() {
   await initPlatformUser();
+  const hasAuthCode = captureAuthCodeFromUrl();
   setConnHint();
   renderAll();
   updateTextareaHeight();
   updateScrollButton();
   updateConversationList();
+  updateUserInfoDisplay();
+  updateAuthDisplay();
+  if (!hasAuthCode) {
+    const result = await tryLoginWithStoredToken();
+    if (result.needsAuth) {
+      setTips("认证失效，正在重新认证…");
+      startAuthFlow();
+      return;
+    }
+  }
   await initConversations();
 
   if (!isConfigured(state.config)) {

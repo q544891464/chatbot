@@ -26,6 +26,14 @@ const DB_USER = String(process.env.DB_USER || "root");
 const DB_PASSWORD = String(process.env.DB_PASSWORD || "");
 const DB_NAME = String(process.env.DB_NAME || "chatbot");
 const DB_CONN_LIMIT = Number.parseInt(process.env.DB_CONN_LIMIT || "10", 10);
+const AUTH_SERVER_DOMAIN = String(process.env.AUTH_SERVER_DOMAIN || "");
+const AUTH_AUTHORIZE_PATH = String(process.env.AUTH_AUTHORIZE_PATH || "/seal/oauth2/authorize");
+const AUTH_TOKEN_PATH = String(process.env.AUTH_TOKEN_PATH || "/seal/oauth2/token");
+const AUTH_USERINFO_PATH = String(process.env.AUTH_USERINFO_PATH || "/seal/userinfo");
+const AUTH_CLIENT_ID = String(process.env.AUTH_CLIENT_ID || "");
+const AUTH_CLIENT_SECRET = String(process.env.AUTH_CLIENT_SECRET || "");
+const AUTH_REDIRECT_URI = String(process.env.AUTH_REDIRECT_URI || "");
+const AUTH_SCOPE = String(process.env.AUTH_SCOPE || "");
 
 const pool = mysql.createPool({
   host: DB_HOST,
@@ -47,6 +55,36 @@ function corsHeaders() {
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400",
   };
+}
+
+function getAuthAuthorizeUrlBase() {
+  return buildAuthUrl(AUTH_AUTHORIZE_PATH);
+}
+
+function getAuthTokenUrlBase() {
+  return buildAuthUrl(AUTH_TOKEN_PATH);
+}
+
+function getAuthUserInfoUrlBase() {
+  return buildAuthUrl(AUTH_USERINFO_PATH);
+}
+
+function buildAuthUrl(pathValue) {
+  let raw = String(pathValue || "").trim();
+  if (!raw) return "";
+  const eqIdx = raw.indexOf("=");
+  if (eqIdx > 0 && /^[A-Z0-9_]+$/i.test(raw.slice(0, eqIdx))) {
+    raw = raw.slice(eqIdx + 1).trim();
+  }
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!AUTH_SERVER_DOMAIN) return "";
+  const base = AUTH_SERVER_DOMAIN.startsWith("http")
+    ? AUTH_SERVER_DOMAIN
+    : `https://${AUTH_SERVER_DOMAIN}`;
+  const normalizedBase = base.replace(/\/+$/, "") + "/";
+  const normalizedPath = raw.startsWith("/") ? raw.slice(1) : raw;
+  return new URL(normalizedPath, normalizedBase).toString().replace(/\/$/, "");
 }
 
 function sendJson(res, status, obj) {
@@ -929,6 +967,112 @@ async function handleAltThread(req, res) {
   }
 }
 
+async function handleAuthToken(req, res) {
+  const tokenUrl = getAuthTokenUrlBase();
+  if (!tokenUrl) {
+    sendJson(res, 500, { error: "Missing AUTH_SERVER_DOMAIN env var on server" });
+    return;
+  }
+  if (!AUTH_CLIENT_ID || !AUTH_CLIENT_SECRET) {
+    sendJson(res, 500, { error: "Missing AUTH_CLIENT_ID/AUTH_CLIENT_SECRET env var on server" });
+    return;
+  }
+
+  const body = await readBodyJson(req);
+  const code = String(body?.code || "");
+  const redirectUri = String(body?.redirectUri || AUTH_REDIRECT_URI || "");
+  if (!code) {
+    sendJson(res, 400, { error: "Missing code" });
+    return;
+  }
+  if (!redirectUri) {
+    sendJson(res, 400, { error: "Missing redirectUri" });
+    return;
+  }
+
+  const params = new URLSearchParams();
+  params.set("grant_type", "authorization_code");
+  params.set("client_id", AUTH_CLIENT_ID);
+  params.set("client_secret", AUTH_CLIENT_SECRET);
+  params.set("code", code);
+  params.set("redirect_uri", redirectUri);
+
+  const upstreamRes = await fetch(tokenUrl, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params.toString(),
+  });
+
+  const text = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    sendJson(res, upstreamRes.status, { error: text || upstreamRes.statusText || "Request failed" });
+    return;
+  }
+
+  try {
+    const data = JSON.parse(text || "{}");
+    sendJson(res, 200, data);
+  } catch {
+    sendJson(res, 200, { raw: text });
+  }
+}
+
+async function handleAuthUserInfo(req, res) {
+  const userInfoUrl = getAuthUserInfoUrlBase();
+  if (!userInfoUrl) {
+    sendJson(res, 500, { error: "Missing AUTH_SERVER_DOMAIN env var on server" });
+    return;
+  }
+
+  const authHeader = String(req.headers.authorization || "");
+  if (!authHeader) {
+    sendJson(res, 400, { error: "Missing Authorization header" });
+    return;
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(`[AUTH USERINFO] GET ${userInfoUrl}`);
+  const upstreamRes = await fetch(userInfoUrl, {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      Authorization: authHeader,
+    },
+  });
+
+  const text = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    // eslint-disable-next-line no-console
+    console.log(`[AUTH USERINFO] status=${upstreamRes.status}`);
+    let errorCode = null;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(text || "{}");
+      errorCode = parsed?.errorCode ?? null;
+    } catch {
+      parsed = null;
+    }
+    sendJson(res, upstreamRes.status, {
+      error: text || upstreamRes.statusText || "Request failed",
+      errorCode,
+      data: parsed,
+      url: userInfoUrl,
+      status: upstreamRes.status,
+    });
+    return;
+  }
+
+  try {
+    const data = JSON.parse(text || "{}");
+    sendJson(res, 200, data);
+  } catch {
+    sendJson(res, 200, { raw: text });
+  }
+}
+
 async function handleStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
   let pathname = decodeURIComponent(url.pathname || "/");
@@ -976,6 +1120,26 @@ const server = http.createServer(async (req, res) => {
         keyConfigured: Boolean(DIFY_API_KEY),
         altConfigured: Boolean(ALT_API_TOKEN || ALT_AUTH_URL),
       });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/auth-config") {
+      sendJson(res, 200, {
+        authorizeUrlBase: getAuthAuthorizeUrlBase(),
+        clientId: AUTH_CLIENT_ID,
+        redirectUri: AUTH_REDIRECT_URI,
+        scope: AUTH_SCOPE,
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth-token") {
+      await handleAuthToken(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/auth-userinfo") {
+      await handleAuthUserInfo(req, res);
       return;
     }
 
