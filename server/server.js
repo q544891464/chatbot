@@ -20,6 +20,9 @@ const ALT_AUTH_PASSWORD = String(process.env.ALT_AUTH_PASSWORD || "");
 const ALT_AUTH_SCOPE = String(process.env.ALT_AUTH_SCOPE || "");
 const ALT_AUTH_CLIENT_ID = String(process.env.ALT_AUTH_CLIENT_ID || "");
 const ALT_AUTH_CLIENT_SECRET = String(process.env.ALT_AUTH_CLIENT_SECRET || "");
+const FEEDBACK_BASE_URL = String(
+  process.env.FEEDBACK_BASE_URL || "http://150.223.194.216:5173",
+).replace(/\/+$/, "");
 const DB_HOST = String(process.env.DB_HOST || "127.0.0.1");
 const DB_PORT = Number.parseInt(process.env.DB_PORT || "3306", 10);
 const DB_USER = String(process.env.DB_USER || "root");
@@ -87,6 +90,15 @@ function buildAuthUrl(pathValue) {
   return new URL(normalizedPath, normalizedBase).toString().replace(/\/$/, "");
 }
 
+function getFeedbackUrl(messageId) {
+  if (!FEEDBACK_BASE_URL) return "";
+  const trimmed = String(messageId || "").trim();
+  if (!trimmed) return "";
+  return `${FEEDBACK_BASE_URL}/api/chat/message/${encodeURIComponent(
+    trimmed,
+  )}/feedback`;
+}
+
 function sendJson(res, status, obj) {
   res.writeHead(status, { ...corsHeaders(), "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(obj));
@@ -123,7 +135,20 @@ function normalizeMessage(msg) {
   const role = msg?.role === "assistant" ? "assistant" : "user";
   const content = String(msg?.content || "");
   const time = String(msg?.time || "");
-  return { role, content, time };
+  const id = msg?.id ?? msg?.messageId;
+  const externalMessageId =
+    msg?.externalMessageId ?? msg?.external_message_id ?? msg?.externalMessageID;
+  const base = { role, content, time };
+  if (id !== undefined && id !== null && String(id).trim()) {
+    base.id = Number.isFinite(Number(id)) ? Number(id) : String(id);
+  }
+  if (externalMessageId !== undefined && externalMessageId !== null) {
+    const trimmed = String(externalMessageId).trim();
+    if (trimmed) {
+      base.externalMessageId = trimmed;
+    }
+  }
+  return base;
 }
 
 function normalizeConversation(item) {
@@ -256,7 +281,7 @@ async function fetchUserConversations(userKey) {
     const convIds = convRows.map((row) => row.id);
     const placeholders = convIds.map(() => "?").join(",");
     const [msgRows] = await conn.query(
-      `SELECT conversation_id, role, content, time_label, position FROM messages WHERE conversation_id IN (${placeholders}) ORDER BY conversation_id, position`,
+      `SELECT id, conversation_id, role, content, time_label, position, external_message_id FROM messages WHERE conversation_id IN (${placeholders}) ORDER BY conversation_id, position`,
       convIds,
     );
 
@@ -264,9 +289,13 @@ async function fetchUserConversations(userKey) {
     for (const row of msgRows) {
       const list = msgMap.get(row.conversation_id) || [];
       list.push({
+        id: row.id,
         role: row.role === "assistant" ? "assistant" : "user",
         content: String(row.content || ""),
         time: String(row.time_label || ""),
+        externalMessageId: row.external_message_id
+          ? String(row.external_message_id)
+          : "",
       });
       msgMap.set(row.conversation_id, list);
     }
@@ -292,6 +321,7 @@ async function fetchUserConversations(userKey) {
 
 async function syncUserConversations(userKey, payload) {
   const normalized = normalizeUserPayload(payload);
+  const messageIds = {};
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
@@ -343,12 +373,18 @@ async function syncUserConversations(userKey, payload) {
           String(msg.time || ""),
           idx,
           updatedAtMs,
+          msg.externalMessageId ? String(msg.externalMessageId) : null,
         ]);
         await conn.query(
-          "INSERT INTO messages (conversation_id, role, content, time_label, position, created_at_ms) VALUES ?",
+          "INSERT INTO messages (conversation_id, role, content, time_label, position, created_at_ms, external_message_id) VALUES ?",
           [values],
         );
       }
+      const [idRows] = await conn.execute(
+        "SELECT id FROM messages WHERE conversation_id = ? ORDER BY position",
+        [convId],
+      );
+      messageIds[convKey] = idRows.map((row) => row.id);
     }
 
     if (keepKeys.size) {
@@ -363,6 +399,7 @@ async function syncUserConversations(userKey, payload) {
     }
 
     await conn.commit();
+    return { messageIds };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -430,8 +467,8 @@ async function handleConversationsSync(req, res) {
     return;
   }
 
-  await syncUserConversations(userId, body);
-  sendJson(res, 200, { ok: true });
+  const result = await syncUserConversations(userId, body);
+  sendJson(res, 200, { ok: true, messageIds: result.messageIds || {} });
 }
 
 function extractAltAnswer(data) {
@@ -465,11 +502,10 @@ function extractAltAnswer(data) {
       if (cleaned.trim()) return cleaned;
     }
   }
-  try {
-    return JSON.stringify(data);
-  } catch {
-    return "";
+  if (String(data.status || "") === "finished") {
+    return "（模型未返回内容）";
   }
+  return "";
 }
 
 function extractAltError(data) {
@@ -480,6 +516,8 @@ function extractAltError(data) {
     data.error_message ||
     data.errorMessage ||
     data.message ||
+    data.msg?.content ||
+    data.msg?.error ||
     data.error?.message ||
     data.error?.msg;
   return typeof msg === "string" ? msg.trim() : "";
@@ -503,6 +541,19 @@ function logAltRawPayload(payload) {
     // eslint-disable-next-line no-console
     console.log("[ALT RAW]", payload);
   }
+}
+
+function extractAltMessageId(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const metadata = payload.metadata || payload.meta || {};
+  const raw =
+    metadata.message_id ??
+    metadata.messageId ??
+    metadata.messageID ??
+    payload.message_id ??
+    payload.messageId;
+  if (raw === undefined || raw === null || raw === "") return "";
+  return String(raw);
 }
 
 function stripToolBlocks(state, text) {
@@ -630,6 +681,10 @@ function appendAltStream(state, chunk) {
 function consumeAltPayload(state, payload) {
   if (!payload || typeof payload !== "object") return;
   state.hasParsed = true;
+  const externalMessageId = extractAltMessageId(payload);
+  if (externalMessageId) {
+    state.externalMessageId = externalMessageId;
+  }
   if (hasToolPayload(payload)) {
     return;
   }
@@ -639,17 +694,16 @@ function consumeAltPayload(state, payload) {
     state.lastPayload = payload;
     return;
   }
-  if (payload.response === null) {
-    return;
-  }
-  state.lastPayload = payload;
-
   const response = typeof payload.response === "string" ? payload.response : "";
   const msgContent = typeof payload.msg?.content === "string" ? payload.msg.content : "";
   const msgType = String(payload.msg?.type || "");
   const status = String(payload.status || "");
   const role = String(payload.msg?.role || "");
   const msgTypeLower = msgType.toLowerCase();
+  if (payload.response === null && !msgContent) {
+    return;
+  }
+  state.lastPayload = payload;
 
   const hasChunkHint = msgType.includes("Chunk") || status === "loading";
   if (
@@ -700,7 +754,7 @@ function tryParseAltLine(state, line) {
 async function readAltResponse(upstreamRes) {
   const reader = upstreamRes.body?.getReader();
   if (!reader) {
-    return { answer: "", raw: null };
+    return { answer: "", raw: null, externalMessageId: "" };
   }
 
   const decoder = new TextDecoder("utf-8");
@@ -715,6 +769,7 @@ async function readAltResponse(upstreamRes) {
     lastChunk: "",
     toolBlock: false,
     toolDump: false,
+    externalMessageId: "",
   };
 
   while (true) {
@@ -748,13 +803,21 @@ async function readAltResponse(upstreamRes) {
     try {
       const obj = JSON.parse(rawText);
       answer = extractAltAnswer(obj);
-      return { answer, raw: obj };
+      return {
+        answer,
+        raw: obj,
+        externalMessageId: extractAltMessageId(obj) || state.externalMessageId,
+      };
     } catch {
       // ignore
     }
   }
 
-  return { answer, raw: state.lastPayload };
+  return {
+    answer,
+    raw: state.lastPayload,
+    externalMessageId: state.externalMessageId || "",
+  };
 }
 
 async function handleAltChat(req, res) {
@@ -798,14 +861,17 @@ async function handleAltChat(req, res) {
   }
 
   const result = await readAltResponse(upstreamRes);
-  sendJson(res, 200, { answer: result.answer || "", raw: result.raw || null });
+  sendJson(res, 200, {
+    answer: result.answer || "",
+    raw: result.raw || null,
+    externalMessageId: result.externalMessageId || "",
+  });
 }
 
 function extractAltChunk(payload) {
   if (!payload || typeof payload !== "object") return null;
   const errorText = extractAltError(payload);
   if (errorText) return errorText;
-  if (payload.response === null) return null;
   const msgType = String(payload.msg?.type || "");
   const status = String(payload.status || "");
   const role = String(payload.msg?.role || "");
@@ -820,12 +886,38 @@ function extractAltChunk(payload) {
     return null;
   }
   if (hasToolPayload(payload)) return null;
-  if (!(msgType.includes("Chunk") || status === "loading")) return null;        
+  if (!(msgType.includes("Chunk") || status === "loading")) return null;
   const msgContent = typeof payload.msg?.content === "string" ? payload.msg.content : "";
   const response = typeof payload.response === "string" ? payload.response : "";
+  if (payload.response === null && msgContent === "") return null;
   const raw = msgContent !== "" ? msgContent : response !== "" ? response : "";
   if (raw !== "") return raw;
   return null;
+}
+
+function captureAltFinalText(state, payload) {
+  if (!payload || typeof payload !== "object") return;
+  if (state.finalText) return;
+  if (hasToolPayload(payload)) return;
+  const msgType = String(payload.msg?.type || "");
+  const status = String(payload.status || "");
+  const role = String(payload.msg?.role || "");
+  const msgTypeLower = msgType.toLowerCase();
+  const isChunk = msgType.includes("Chunk") || status === "loading";
+  if (isChunk) return;
+  if (
+    msgTypeLower.includes("human") ||
+    msgTypeLower.includes("tool") ||
+    msgTypeLower.includes("function") ||
+    role === "user" ||
+    role === "tool"
+  ) {
+    return;
+  }
+  const msgContent = typeof payload.msg?.content === "string" ? payload.msg.content : "";
+  if (payload.response === null && !msgContent) return;
+  const text = extractAltAnswer(payload);
+  if (text) state.finalText = text;
 }
 
 async function handleAltChatStream(req, res) {
@@ -894,6 +986,10 @@ async function handleAltChatStream(req, res) {
     toolBlock: false,
     toolDump: false,
     errorSent: false,
+    externalMessageId: "",
+    metaSent: false,
+    finalText: "",
+    lastPayload: null,
   };
 
   while (true) {
@@ -910,6 +1006,20 @@ async function handleAltChatStream(req, res) {
       try {
         const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
         logAltRawPayload(payloadObj);
+        state.lastPayload = payloadObj;
+        const externalMessageId = extractAltMessageId(payloadObj);
+        if (externalMessageId) {
+          state.externalMessageId = externalMessageId;
+          if (!state.metaSent) {
+            state.metaSent = true;
+            res.write(
+              `data: ${JSON.stringify({
+                event: "meta",
+                messageId: externalMessageId,
+              })}\n\n`,
+            );
+          }
+        }
         const errorText = extractAltError(payloadObj);
         if (errorText) {
           if (!state.errorSent) {
@@ -923,7 +1033,14 @@ async function handleAltChatStream(req, res) {
           const delta = appendAltStream(state, chunk);
           if (delta) {
             res.write(`data: ${JSON.stringify({ event: "message", answer: delta })}\n\n`);
+          } else if (chunk && !state.toolBlock && !state.toolDump) {
+            state.streamedText += chunk;
+            res.write(
+              `data: ${JSON.stringify({ event: "message", answer: chunk })}\n\n`,
+            );
           }
+        } else {
+          captureAltFinalText(state, payloadObj);
         }
       } catch {
         // ignore
@@ -935,6 +1052,20 @@ async function handleAltChatStream(req, res) {
     try {
       const payloadObj = JSON.parse(buffer.startsWith("data:") ? buffer.slice(5).trim() : buffer);
       logAltRawPayload(payloadObj);
+      state.lastPayload = payloadObj;
+      const externalMessageId = extractAltMessageId(payloadObj);
+      if (externalMessageId) {
+        state.externalMessageId = externalMessageId;
+        if (!state.metaSent) {
+          state.metaSent = true;
+          res.write(
+            `data: ${JSON.stringify({
+              event: "meta",
+              messageId: externalMessageId,
+            })}\n\n`,
+          );
+        }
+      }
       const errorText = extractAltError(payloadObj);
       if (errorText) {
         if (!state.errorSent) {
@@ -942,17 +1073,44 @@ async function handleAltChatStream(req, res) {
           res.write(`data: ${JSON.stringify({ event: "message", answer: errorText })}\n\n`);
         }
       } else {
-      const chunk = extractAltChunk(payloadObj);
-      if (chunk !== null) {
-        const delta = appendAltStream(state, chunk);
-        if (delta) {
-          res.write(`data: ${JSON.stringify({ event: "message", answer: delta })}\n\n`);
+        const chunk = extractAltChunk(payloadObj);
+        if (chunk !== null) {
+          const delta = appendAltStream(state, chunk);
+          if (delta) {
+            res.write(`data: ${JSON.stringify({ event: "message", answer: delta })}\n\n`);
+          } else if (chunk && !state.toolBlock && !state.toolDump) {
+            state.streamedText += chunk;
+            res.write(
+              `data: ${JSON.stringify({ event: "message", answer: chunk })}\n\n`,
+            );
+          }
+        } else {
+          captureAltFinalText(state, payloadObj);
         }
-      }
       }
     } catch {
       // ignore
     }
+  }
+
+  if (!state.errorSent && !state.streamedText && !state.finalText && state.lastPayload) {
+    const fallback = extractAltAnswer(state.lastPayload);
+    if (fallback) state.finalText = fallback;
+  }
+
+  if (!state.errorSent && !state.streamedText && state.finalText) {
+    res.write(
+      `data: ${JSON.stringify({ event: "message", answer: state.finalText })}\n\n`,
+    );
+  } else if (!state.errorSent && !state.streamedText && state.rawStreamedText) {
+    const cleaned = filterAltText(
+      { toolBlock: false, toolDump: false },
+      state.rawStreamedText,
+    );
+    const fallback = cleaned.trim() ? cleaned : state.rawStreamedText;
+    res.write(
+      `data: ${JSON.stringify({ event: "message", answer: fallback })}\n\n`,
+    );
   }
 
   res.write(`data: ${JSON.stringify({ event: "message_end" })}\n\n`);
@@ -1112,6 +1270,68 @@ async function handleAuthUserInfo(req, res) {
   }
 }
 
+async function handleFeedback(req, res) {
+  const body = await readBodyJson(req);
+  const messageId = String(body?.messageId || "").trim();
+  const rating = String(body?.rating || "").trim();
+  const reason = String(body?.reason || "");
+
+  if (!messageId) {
+    sendJson(res, 400, { error: "Missing messageId" });
+    return;
+  }
+  if (rating !== "like" && rating !== "dislike") {
+    sendJson(res, 400, { error: "Invalid rating" });
+    return;
+  }
+
+  const feedbackUrl = getFeedbackUrl(messageId);
+  if (!feedbackUrl) {
+    sendJson(res, 500, { error: "Feedback base URL not configured" });
+    return;
+  }
+
+  const payload = { rating };
+  if (rating === "dislike") {
+    payload.reason = reason;
+  }
+
+  let token = "";
+  try {
+    token = await getAltAuthToken();
+  } catch (err) {
+    sendJson(res, 500, { error: String(err?.message || err) });
+    return;
+  }
+
+  const cookieHeader = String(req.headers.cookie || "");
+  const upstreamRes = await fetch(feedbackUrl, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const text = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    sendJson(res, upstreamRes.status, {
+      error: text || upstreamRes.statusText || "Feedback request failed",
+    });
+    return;
+  }
+
+  try {
+    const data = JSON.parse(text || "{}");
+    sendJson(res, 200, data);
+  } catch {
+    sendJson(res, 200, { raw: text });
+  }
+}
+
 async function handleStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
   let pathname = decodeURIComponent(url.pathname || "/");
@@ -1177,8 +1397,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/api/auth-userinfo") {
+    if (req.method === "GET" && url.pathname === "/api/auth-userinfo") {        
       await handleAuthUserInfo(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/feedback") {
+      await handleFeedback(req, res);
       return;
     }
 

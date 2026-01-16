@@ -132,7 +132,7 @@ body{
 .messages{
   flex:1;
   overflow:auto;
-  padding: 14px 12px;
+  padding: 14px 12px calc(120px + var(--safe-b));
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
 }
@@ -325,6 +325,15 @@ body{
   border-radius: 999px;
   font-size: 11px;
 }
+.msg__action.is-active{
+  border-color: rgba(37,99,235,0.35);
+  background: rgba(37,99,235,0.12);
+  color: rgba(30,64,175,0.95);
+}
+.msg__action:disabled{
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .msg--user .msg__action{
   border-color: rgba(255,255,255,0.35);
   background: rgba(255,255,255,0.16);
@@ -499,6 +508,11 @@ body{
 }
 
 .composer{
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
   padding: 12px 12px calc(10px + var(--safe-b));
   border-top: 1px solid rgba(229,231,235,0.8);
   background: rgba(255,255,255,0.88);

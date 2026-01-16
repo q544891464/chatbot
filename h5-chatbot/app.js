@@ -1,15 +1,14 @@
-import { getLoginUserInfo } from "./platform-bridge.js";
-
+﻿import { getLoginUserInfo } from "./platform-bridge.js";
 const STORAGE_KEY = "h5ChatbotConfig:v1";
 const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
 const AUTH_STORAGE_KEY = "h5ChatbotAuth:v1";
 const AGENT_ID = "ChatbotAgent";
+const FEEDBACK_ENDPOINT_PATH = "/feedback";
 const DEFAULT_USER_META = {
   userName: "test",
   org: "org1",
   phone: "1234567890",
 };
-
 const el = {
   connHint: document.getElementById("connHint"),
   messages: document.getElementById("messages"),
@@ -21,7 +20,6 @@ const el = {
   newChatBtn: document.getElementById("newChatBtn"),
   scrollBtn: document.getElementById("scrollBtn"),
   chatListBtn: document.getElementById("chatListBtn"),
-
   modal: document.getElementById("settingsModal"),
   backdrop: document.getElementById("settingsBackdrop"),
   closeSettingsBtn: document.getElementById("closeSettingsBtn"),
@@ -32,13 +30,11 @@ const el = {
   responseMode: document.getElementById("responseMode"),
   resetConversationBtn: document.getElementById("resetConversationBtn"),
   clearChatBtn: document.getElementById("clearChatBtn"),
-
   chatListModal: document.getElementById("chatListModal"),
   chatListBackdrop: document.getElementById("chatListBackdrop"),
   closeChatListBtn: document.getElementById("closeChatListBtn"),
   chatList: document.getElementById("chatList"),
   newChatFromListBtn: document.getElementById("newChatFromListBtn"),
-
   platform: document.getElementById("platform"),
   apiKeyField: document.getElementById("apiKeyField"),
   responseModeField: document.getElementById("responseModeField"),
@@ -50,25 +46,21 @@ const el = {
   authStateValue: document.getElementById("authStateValue"),
   authAccessTokenValue: document.getElementById("authAccessTokenValue"),
   authRefreshTokenValue: document.getElementById("authRefreshTokenValue"),
-
   imageViewer: document.getElementById("imageViewer"),
   imageViewerBackdrop: document.getElementById("imageViewerBackdrop"),
   imageViewerContent: document.getElementById("imageViewerContent"),
   imageViewerImg: document.getElementById("imageViewerImg"),
 };
-
 function nowTime() {
   const d = new Date();
   const hh = String(d.getHours()).padStart(2, "0");
   const mm = String(d.getMinutes()).padStart(2, "0");
   return `${hh}:${mm}`;
 }
-
 function clampMessages(list) {
   const MAX = 80;
   return list.length > MAX ? list.slice(list.length - MAX) : list;
 }
-
 function safeJsonParse(raw, fallback) {
   try {
     return JSON.parse(raw);
@@ -76,7 +68,6 @@ function safeJsonParse(raw, fallback) {
     return fallback;
   }
 }
-
 function loadAuthState() {
   return safeJsonParse(localStorage.getItem(AUTH_STORAGE_KEY) || "null", {
     code: "",
@@ -88,7 +79,6 @@ function loadAuthState() {
     receivedAt: 0,
   });
 }
-
 function saveAuthState(payload) {
   localStorage.setItem(
     AUTH_STORAGE_KEY,
@@ -103,25 +93,24 @@ function saveAuthState(payload) {
     }),
   );
 }
-
 function normalizeBaseUrl(input) {
   const raw = String(input || "").trim();
   if (!raw) return "";
   return raw.replace(/\/+$/, "");
 }
-
 function isProxyBaseUrl(baseUrl) {
   const b = normalizeBaseUrl(baseUrl);
   return b === "/api" || b.endsWith("/api");
 }
-
 function randomId(prefix = "u") {
   const rnd = Math.random().toString(16).slice(2);
   return `${prefix}-${Date.now().toString(16)}-${rnd}`;
 }
-
 function loadConfig() {
-  const saved = safeJsonParse(localStorage.getItem(STORAGE_KEY) || "null", null);
+  const saved = safeJsonParse(
+    localStorage.getItem(STORAGE_KEY) || "null",
+    null,
+  );
   const baseUrl = normalizeBaseUrl(saved?.baseUrl || "/api");
   const apiKey = String(saved?.apiKey || "");
   const userId = String(saved?.userId || randomId("user"));
@@ -129,7 +118,6 @@ function loadConfig() {
   const platform = "agent";
   return { baseUrl, apiKey, userId, responseMode, platform };
 }
-
 function saveConfig(cfg) {
   localStorage.setItem(
     STORAGE_KEY,
@@ -141,9 +129,8 @@ function saveConfig(cfg) {
       platform: "agent",
     }),
   );
-}
+} // Choose a stable identifier for server-side conversation storage.
 
-// Choose a stable identifier for server-side conversation storage.
 function pickPlatformUserId(userInfo) {
   if (!userInfo || typeof userInfo !== "object") return "";
   const candidates = [
@@ -160,19 +147,20 @@ function pickPlatformUserId(userInfo) {
   }
   return "";
 }
-
 function deriveTitleFromMessages(messages) {
   const first = (messages || []).find((m) => m?.role === "user" && m?.content);
-  const text = String(first?.content || "").trim().replace(/\s+/g, " ");
+  const text = String(first?.content || "")
+    .trim()
+    .replace(/\s+/g, " ");
   if (!text) return "新对话";
   return text.length > 18 ? `${text.slice(0, 18)}…` : text;
 }
-
 function normalizeConversation(item) {
   const now = Date.now();
   const messages = Array.isArray(item?.messages) ? item.messages : [];
   const platform = "agent";
-  const title = String(item?.title || "").trim() || deriveTitleFromMessages(messages);
+  const title =
+    String(item?.title || "").trim() || deriveTitleFromMessages(messages);
   return {
     id: String(item?.id || randomId("conv")),
     title,
@@ -183,7 +171,6 @@ function normalizeConversation(item) {
     updatedAt: Number(item?.updatedAt || now),
   };
 }
-
 function createConversation(seed) {
   const now = Date.now();
   const base = normalizeConversation({
@@ -197,26 +184,29 @@ function createConversation(seed) {
   });
   return base;
 }
-
 function getStoreBase() {
   const b = normalizeBaseUrl(state.config.baseUrl);
   return isProxyBaseUrl(b) ? b : "/api";
 }
-
 async function fetchConversationsFromServer() {
   const url = `${getStoreBase()}/conversations?userId=${encodeURIComponent(state.config.userId)}`;
-  const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+  });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(txt || res.statusText || "load conversations failed");
   }
   const data = await res.json();
-  const items = Array.isArray(data?.items) ? data.items.map(normalizeConversation) : [];
+  const items = Array.isArray(data?.items)
+    ? data.items.map(normalizeConversation)
+    : [];
   const preferredId = String(data?.activeId || "");
-  const activeId = items.some((c) => c.id === preferredId) ? preferredId : items[0]?.id || "";
+  const activeId = items.some((c) => c.id === preferredId)
+    ? preferredId
+    : items[0]?.id || "";
   return { items, activeId };
 }
-
 function serializeConversation(conv) {
   return {
     id: String(conv.id || randomId("conv")),
@@ -228,7 +218,19 @@ function serializeConversation(conv) {
     updatedAt: Number(conv.updatedAt || Date.now()),
   };
 }
-
+function applyMessageIds(messageIdMap) {
+  if (!messageIdMap || typeof messageIdMap !== "object") return;
+  for (const conv of state.conversations) {
+    const ids = messageIdMap[conv.id];
+    if (!Array.isArray(ids) || !ids.length) continue;
+    conv.messages.forEach((msg, idx) => {
+      const id = ids[idx];
+      if (id !== undefined && id !== null && String(id).trim()) {
+        msg.id = id;
+      }
+    });
+  }
+}
 async function syncConversationsToServer(payload) {
   const url = `${getStoreBase()}/conversations/sync`;
   const res = await fetch(url, {
@@ -244,8 +246,12 @@ async function syncConversationsToServer(payload) {
     const txt = await res.text().catch(() => "");
     throw new Error(txt || res.statusText || "sync conversations failed");
   }
+  const data = await res.json().catch(() => ({}));
+  if (data?.messageIds) {
+    applyMessageIds(data.messageIds);
+  }
+  return data;
 }
-
 function saveConversations() {
   sortConversations();
   const payload = {
@@ -256,7 +262,6 @@ function saveConversations() {
     setTips("会话同步失败，请检查服务是否启动。");
   });
 }
-
 const initialConfig = loadConfig();
 const initialConversation = createConversation({ platform: "agent" });
 const DEFAULT_QUESTION_BANK = [
@@ -266,7 +271,6 @@ const DEFAULT_QUESTION_BANK = [
   "我今年11岗级，我想晋升到15岗级，我需要满足什么条件呢？",
   "五险一金的缴纳比例",
 ];
-
 const state = {
   config: initialConfig,
   conversations: [initialConversation],
@@ -277,14 +281,12 @@ const state = {
   questionBank: DEFAULT_QUESTION_BANK.slice(),
   promptSelection: { pending: false, value: "" },
 };
-
 const IS_MOBILE = (() => {
   const ua = navigator.userAgent || "";
   const touch = navigator.maxTouchPoints || 0;
   return /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(ua) || touch > 1;
-})();
+})(); // Try to sync userId from the platform SDK before loading conversations.
 
-// Try to sync userId from the platform SDK before loading conversations.
 async function initPlatformUser() {
   try {
     const userInfo = await getLoginUserInfo();
@@ -301,7 +303,6 @@ async function initPlatformUser() {
     return false;
   }
 }
-
 async function initConversations() {
   try {
     const data = await fetchConversationsFromServer();
@@ -316,13 +317,14 @@ async function initConversations() {
   } catch {
     setTips("未能连接会话存储服务，将在本地临时使用。");
   }
-
-  const legacy = safeJsonParse(localStorage.getItem(LEGACY_CHAT_KEY) || "null", null);
+  const legacy = safeJsonParse(
+    localStorage.getItem(LEGACY_CHAT_KEY) || "null",
+    null,
+  );
   if (legacy) {
     localStorage.removeItem(LEGACY_CHAT_KEY);
   }
 }
-
 async function loadQuestionBank() {
   try {
     const res = await fetch("./question-bank.json", { cache: "no-store" });
@@ -331,9 +333,11 @@ async function loadQuestionBank() {
     const items = Array.isArray(data)
       ? data
       : Array.isArray(data?.items)
-      ? data.items
-      : [];
-    state.questionBank = items.map((item) => String(item).trim()).filter(Boolean);
+        ? data.items
+        : [];
+    state.questionBank = items
+      .map((item) => String(item).trim())
+      .filter(Boolean);
     if (!state.questionBank.length) {
       state.questionBank = DEFAULT_QUESTION_BANK.slice();
     }
@@ -341,25 +345,73 @@ async function loadQuestionBank() {
     state.questionBank = DEFAULT_QUESTION_BANK.slice();
   }
 }
-
 function isConfigured(cfg) {
   if (!cfg.userId) return false;
   return true;
 }
-
 function setTips(text) {
   el.tips.textContent = text || "";
 }
-
+function getFeedbackUrl() {
+  return `${getStoreBase()}
+${FEEDBACK_ENDPOINT_PATH}`;
+}
+async function ensureFeedbackId(message) {
+  if (message?.externalMessageId) return message.externalMessageId;
+  const payload = {
+    activeId: state.activeId,
+    items: state.conversations.map(serializeConversation),
+  };
+  try {
+    await syncConversationsToServer(payload);
+  } catch {
+    // ignore
+  }
+  return message?.externalMessageId || "";
+}
+async function sendFeedback(message, rating, reason) {
+  const id = await ensureFeedbackId(message);
+  if (!id) {
+    throw new Error("未获取到外部消息ID");
+  }
+  const payload = { messageId: id, rating };
+  if (rating === "dislike") {
+    payload.reason = reason || "";
+  }
+  const url = getFeedbackUrl();
+  if (!url) {
+    throw new Error("未获取到外部消息ID");
+  }
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(txt || res.statusText || "反馈失败");
+  }
+}
+function updateFeedbackState(meta, feedback, status) {
+  const likeBtn = meta.querySelector('[data-feedback="like"]');
+  const dislikeBtn = meta.querySelector('[data-feedback="dislike"]');
+  const disabled = status === "typing" || Boolean(feedback);
+  if (likeBtn) {
+    likeBtn.disabled = disabled;
+    likeBtn.classList.toggle("is-active", feedback === "like");
+  }
+  if (dislikeBtn) {
+    dislikeBtn.disabled = disabled;
+    dislikeBtn.classList.toggle("is-active", feedback === "dislike");
+  }
+}
 function getPlatformLabel(platform) {
   return "ChatbotAgent";
 }
-
 function getActivePlatform() {
   const conv = getActiveConversation();
   return conv.platform || "agent";
 }
-
 function setConnHint() {
   if (!isConfigured(state.config)) {
     el.connHint.textContent = "未配置平台";
@@ -367,16 +419,16 @@ function setConnHint() {
   }
   el.connHint.textContent = "已连接：ChatbotAgent";
 }
-
 function shouldAutoScroll(container) {
   const threshold = 120;
-  return container.scrollHeight - (container.scrollTop + container.clientHeight) < threshold;
+  return (
+    container.scrollHeight - (container.scrollTop + container.clientHeight) <
+    threshold
+  );
 }
-
 function scrollToBottom(container) {
   container.scrollTop = container.scrollHeight;
 }
-
 function getActiveConversation() {
   let conv = state.conversations.find((item) => item.id === state.activeId);
   if (!conv) {
@@ -387,11 +439,9 @@ function getActiveConversation() {
   }
   return conv;
 }
-
 function sortConversations() {
   state.conversations.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
-
 function formatConversationTime(ts) {
   const d = new Date(ts || Date.now());
   const now = new Date();
@@ -403,48 +453,39 @@ function formatConversationTime(ts) {
   const day = String(d.getDate()).padStart(2, "0");
   return `${month}/${day}`;
 }
-
 function updateConversationList() {
   if (!el.chatList) return;
   sortConversations();
   el.chatList.innerHTML = "";
-
   for (const conv of state.conversations) {
     const item = document.createElement("button");
     item.type = "button";
     item.className = `chatlist__item${conv.id === state.activeId ? " is-active" : ""}`;
     item.dataset.id = conv.id;
-
     const title = document.createElement("div");
     title.className = "chatlist__title";
     title.textContent = conv.title || "新对话";
-
     const meta = document.createElement("div");
     meta.className = "chatlist__meta";
     const platform = conv.platform || state.config.platform;
     meta.textContent = `${formatConversationTime(conv.updatedAt)} · ${conv.messages.length} 条 · ${getPlatformLabel(platform)}`;
-
     item.appendChild(title);
     item.appendChild(meta);
     item.addEventListener("click", () => {
       selectConversation(conv.id);
       closeChatList();
     });
-
     el.chatList.appendChild(item);
   }
 }
-
 function openChatList() {
   closeSettings();
   updateConversationList();
   el.chatListModal.setAttribute("aria-hidden", "false");
 }
-
 function closeChatList() {
   el.chatListModal.setAttribute("aria-hidden", "true");
 }
-
 function selectConversation(id) {
   if (id === state.activeId) return;
   state.activeId = id;
@@ -458,7 +499,6 @@ function selectConversation(id) {
   setConnHint();
   updateConversationList();
 }
-
 function escapeHtml(text) {
   return String(text || "")
     .replace(/&/g, "&amp;")
@@ -467,24 +507,19 @@ function escapeHtml(text) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
-
 function isImageUrl(url) {
   return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url || "");
 }
-
 function renderInlineMarkdown(escapedText) {
   let out = String(escapedText || "");
   const placeholders = [];
   const token = (i) => `@@MD${i}@@`;
-
   out = out.replace(/(^|\n)\s*([^\n*]{1,12})\*\*(?=\s*[:：])/g, "$1**$2**");
-
   const pushPlaceholder = (html) => {
     const i = placeholders.length;
     placeholders.push(html);
     return token(i);
   };
-
   const normalizeUrlToken = (raw) => {
     let url = String(raw || "");
     if (!url) return url;
@@ -492,7 +527,6 @@ function renderInlineMarkdown(escapedText) {
     url = url.replace(/([>"'`]|&quot;|&#39;|&apos;)+$/gi, "");
     return url;
   };
-
   const renderUrlToken = (raw, altText) => {
     const url = normalizeUrlToken(raw);
     if (!url) return raw;
@@ -505,39 +539,37 @@ function renderInlineMarkdown(escapedText) {
       `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
     );
   };
-
-  out = out.replace(/!\[([^\]]*)\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)/g, (_, alt, url) => {
-    return renderUrlToken(url, alt);
-  });
-
+  out = out.replace(
+    /!\[([^\]]*)\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)/g,
+    (_, alt, url) => {
+      return renderUrlToken(url, alt);
+    },
+  );
   out = out.replace(/`([^`\n]+)`/g, (_, code) => {
     return pushPlaceholder(`<code class="md-inline">${code}</code>`);
   });
-
-  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
-    const cleanUrl = normalizeUrlToken(url);
-    if (!cleanUrl) return label;
-    return pushPlaceholder(
-      `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`,
-    );
-  });
-
+  out = out.replace(
+    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    (_, label, url) => {
+      const cleanUrl = normalizeUrlToken(url);
+      if (!cleanUrl) return label;
+      return pushPlaceholder(
+        `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`,
+      );
+    },
+  );
   out = out.replace(/(https?:\/\/[^\s<]+[^\s<\.)])/g, (url) => {
     return renderUrlToken(url);
   });
-
   out = out.replace(/~~([^\n~]+)~~/g, "<del>$1</del>");
   out = out.replace(/(\*\*|__)([^\n]+?)\1/g, "<strong>$2</strong>");
   out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
   out = out.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
-
   for (let i = 0; i < placeholders.length; i++) {
     out = out.replaceAll(token(i), placeholders[i]);
   }
-
   return out;
 }
-
 function normalizeMarkdownText(text) {
   let out = String(text || "");
   const urls = [];
@@ -547,9 +579,12 @@ function normalizeMarkdownText(text) {
     return `@@URL${idx}@@`;
   });
   out = out.replace(/([^\n])\s*(#{1,6})\s*(?=\S)/g, "$1\n$2 ");
-  out = out.replace(/([:：。！？!?.])\s*([-*])\s+(?=\S)/g, "$1\n$2 ");
-  out = out.replace(/([:：。！？!?.])\s*(\d+\.)\s+(?=\S)/g, "$1\n$2 ");
-  out = out.replace(/([\u4e00-\u9fff。！？；：，、）\)\]】])\s*-\s*(?=\S)/g, "$1\n- ");
+  out = out.replace(/([:：。！？?.])\\s*([-*])\\s+(?=\\S)/g, "$1\\n$2 ");
+  out = out.replace(/([:：。！？?.])\\s*(\\d+\\.)\\s+(?=\\S)/g, "$1\\n$2 ");
+  out = out.replace(
+    /([\u4e00-\u9fff。！？；：，、）\)\]】])\s*-\s*(?=\S)/g,
+    "$1\n- ",
+  );
   out = out.replace(
     /([\u4e00-\u9fff。！？；：，、）\)\]】])\s*(\d+\.)\s*(?=(\*\*|[\u4e00-\u9fffA-Za-z]))/g,
     "$1\n$2 ",
@@ -561,9 +596,10 @@ function normalizeMarkdownText(text) {
   }
   return out;
 }
-
 function renderMarkdownLite(text) {
-  const src = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const src = String(text || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
   const unescaped = src
     .replace(/\\r\\n/g, "\n")
     .replace(/\\n/g, "\n")
@@ -573,7 +609,6 @@ function renderMarkdownLite(text) {
     "$1**$2**",
   );
   const tokens = [];
-
   const fenceRe = /```([\w-]+)?\n([\s\S]*?)```/g;
   let lastIndex = 0;
   let m;
@@ -585,15 +620,15 @@ function renderMarkdownLite(text) {
   }
   const tail = normalizedSrc.slice(lastIndex);
   if (tail) tokens.push({ type: "text", value: tail });
-
   let html = "";
-
   const isListBlock = (block, ordered) => {
     const lines = String(block || "").split("\n");
     let hasItem = false;
     for (const line of lines) {
       if (!line.trim()) continue;
-      const isItem = ordered ? /^\s*\d+\.\s+/.test(line) : /^\s*[-*]\s+/.test(line);
+      const isItem = ordered
+        ? /^\s*\d+\.\s+/.test(line)
+        : /^\s*[-*]\s+/.test(line);
       if (isItem) {
         hasItem = true;
         continue;
@@ -603,7 +638,6 @@ function renderMarkdownLite(text) {
     }
     return hasItem;
   };
-
   const isContinuationBlock = (block) => {
     const lines = String(block || "").split("\n");
     let hasIndented = false;
@@ -617,9 +651,8 @@ function renderMarkdownLite(text) {
     }
     return hasIndented;
   };
-
-  const isSeparatorToken = (value) => /^:?-{3,}:?$/.test(String(value || "").trim());
-
+  const isSeparatorToken = (value) =>
+    /^:?-{3,}:?$/.test(String(value || "").trim());
   const isTableSeparatorLine = (line) => {
     let row = String(line || "").trim();
     if (!row) return false;
@@ -629,14 +662,12 @@ function renderMarkdownLite(text) {
     if (!cells.length) return false;
     return cells.every((cell) => isSeparatorToken(cell));
   };
-
   const parseTableRow = (line) => {
     let row = String(line || "").trim();
     if (row.startsWith("|")) row = row.slice(1);
     if (row.endsWith("|")) row = row.slice(0, -1);
     return row.split("|").map((cell) => cell.trim());
   };
-
   const isTableBlock = (block) => {
     const lines = String(block || "")
       .split("\n")
@@ -646,19 +677,16 @@ function renderMarkdownLite(text) {
     if (!lines[0].includes("|")) return false;
     return isTableSeparatorLine(lines[1]);
   };
-
   const splitTablesFromBlock = (block) => {
     const lines = String(block || "").split("\n");
     const segments = [];
     let buffer = [];
-
     const flushBuffer = () => {
       if (buffer.length) {
         segments.push(buffer.join("\n"));
         buffer = [];
       }
     };
-
     let i = 0;
     while (i < lines.length) {
       const line = lines[i];
@@ -688,34 +716,31 @@ function renderMarkdownLite(text) {
       buffer.push(line);
       i += 1;
     }
-
     flushBuffer();
     return segments;
   };
-
   const buildMarkdownTable = (header, rows) => {
     const headerLine = `| ${header.join(" | ")} |`;
     const sepLine = `| ${header.map(() => "---").join(" | ")} |`;
     const rowLines = rows.map((row) => `| ${row.join(" | ")} |`);
     return [headerLine, sepLine, ...rowLines].join("\n");
   };
-
   const parseInlineTableLine = (line) => {
     if (!line.includes("|")) return null;
-    const cleaned = line.replace(/```[a-z0-9-]*/gi, "").replace(/```/g, "").trim();
+    const cleaned = line
+      .replace(/```[a-z0-9-]*/gi, "")
+      .replace(/```/g, "")
+      .trim();
     if (!cleaned.includes("|")) return null;
-
     let tokens = cleaned.split("|").map((item) => item.trim());
     if (tokens[0] === "") tokens = tokens.slice(1);
     if (tokens[tokens.length - 1] === "") tokens = tokens.slice(0, -1);
     if (tokens.length < 4) return null;
-
     const lowerFirst = String(tokens[0] || "").toLowerCase();
     if (lowerFirst === "markdown" || lowerFirst === "md") {
       tokens = tokens.slice(1);
     }
     if (tokens.length < 4) return null;
-
     const parseTokens = (parts, prefixCandidate) => {
       let sepStart = -1;
       for (let i = 0; i < parts.length; i++) {
@@ -725,51 +750,44 @@ function renderMarkdownLite(text) {
         }
       }
       if (sepStart <= 0) return null;
-
       let sepEnd = sepStart;
       while (sepEnd < parts.length && isSeparatorToken(parts[sepEnd])) {
         sepEnd += 1;
       }
-
       const header = parts.slice(0, sepStart);
       const columnCount = sepEnd - sepStart;
       if (!columnCount || header.length !== columnCount) return null;
-
       let prefix = prefixCandidate ? String(prefixCandidate).trim() : "";
       const firstHeader = header[0] || "";
-      const colonIndex = Math.max(firstHeader.lastIndexOf("："), firstHeader.lastIndexOf(":"));
+      const colonIndex = Math.max(
+        firstHeader.lastIndexOf("："),
+        firstHeader.lastIndexOf(":"),
+      );
       if (colonIndex > -1 && colonIndex < firstHeader.length - 1) {
         const headPrefix = firstHeader.slice(0, colonIndex + 1).trim();
         header[0] = firstHeader.slice(colonIndex + 1).trim();
         prefix = [prefix, headPrefix].filter(Boolean).join(" ");
       }
-
       let rest = parts.slice(sepEnd);
       if (rest.length < columnCount) return null;
-
       const rows = [];
       while (rest.length >= columnCount) {
         rows.push(rest.slice(0, columnCount));
         rest = rest.slice(columnCount);
       }
-
       const suffix = rest.join(" ").trim();
       return { prefix, table: buildMarkdownTable(header, rows), suffix };
     };
-
     const direct = parseTokens(tokens, "");
     if (direct) return direct;
-
     const prefixCandidate = tokens[0];
     const colonHint =
       prefixCandidate?.includes("：") ||
       prefixCandidate?.includes(":") ||
-      /表格|资费|如下|如下|如下表|如下为/.test(prefixCandidate || "");
+      /表格|资费|如下|如下表|如下图/.test(prefixCandidate || "");
     if (!colonHint) return null;
-
     return parseTokens(tokens.slice(1), prefixCandidate);
   };
-
   const expandInlineTables = (text) => {
     const lines = String(text || "").split("\n");
     const outLines = [];
@@ -785,14 +803,12 @@ function renderMarkdownLite(text) {
     }
     return outLines.join("\n");
   };
-
   for (const t of tokens) {
     if (t.type === "code") {
       const codeEscaped = escapeHtml(t.value);
       html += `<pre class="md-code"><code>${codeEscaped}</code></pre>`;
       continue;
     }
-
     const normalized = expandInlineTables(normalizeMarkdownText(t.value));
     const rawBlocks = String(normalized).split(/\n{2,}/);
     const blocks = [];
@@ -820,7 +836,6 @@ function renderMarkdownLite(text) {
       }
       blocks.push(block);
     }
-
     const expandedBlocks = [];
     for (const block of blocks) {
       const segments = splitTablesFromBlock(block);
@@ -828,26 +843,27 @@ function renderMarkdownLite(text) {
         if (seg.trim()) expandedBlocks.push(seg);
       }
     }
-
     for (const block of expandedBlocks) {
       const trimmed = block.trimEnd();
       if (!trimmed.trim()) continue;
-
       const lines = trimmed.split("\n");
       const hasHeading = lines.some((l) => /^ {0,3}(#{1,6})\s+/.test(l.trim()));
-      const hasRule = lines.some((l) => /^ {0,3}(-{3,}|\*{3,}|_{3,})$/.test(l.trim()));
+      const hasRule = lines.some((l) =>
+        /^ {0,3}(-{3,}|\*{3,}|_{3,})$/.test(l.trim()),
+      );
       const hasQuote = lines.some((l) => /^\s*>/.test(l));
-
       const isUl = isListBlock(trimmed, false);
       const isOl = isListBlock(trimmed, true);
-
       if (isTableBlock(trimmed)) {
         const tableLines = trimmed
           .split("\n")
           .map((line) => line.trim())
           .filter(Boolean);
         const header = parseTableRow(tableLines[0]);
-        const rows = tableLines.slice(2).map(parseTableRow).filter((row) => row.length);
+        const rows = tableLines
+          .slice(2)
+          .map(parseTableRow)
+          .filter((row) => row.length);
         const maxCols = Math.max(
           header.length,
           rows.reduce((max, row) => Math.max(max, row.length), 0),
@@ -864,9 +880,10 @@ function renderMarkdownLite(text) {
           });
           return `<tr>${htmlCells.join("")}</tr>`;
         };
-
         const headerRow = renderRow(padRow(header), "th");
-        const bodyRows = rows.map((row) => renderRow(padRow(row), "td")).join("");
+        const bodyRows = rows
+          .map((row) => renderRow(padRow(row), "td"))
+          .join("");
         html += `<div class="md-table"><table><thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table></div>`;
       } else if (isUl) {
         html += "<ul>";
@@ -876,7 +893,10 @@ function renderMarkdownLite(text) {
           const mm = /^\s*[-*]\s+(.+)\s*$/.exec(line);
           if (mm) {
             if (current) {
-              const item = renderInlineMarkdown(escapeHtml(current)).replace(/\n/g, "<br />");
+              const item = renderInlineMarkdown(escapeHtml(current)).replace(
+                /\n/g,
+                "<br />",
+              );
               html += `<li>${item}</li>`;
             }
             current = mm[1];
@@ -887,7 +907,10 @@ function renderMarkdownLite(text) {
           }
         }
         if (current) {
-          const item = renderInlineMarkdown(escapeHtml(current)).replace(/\n/g, "<br />");
+          const item = renderInlineMarkdown(escapeHtml(current)).replace(
+            /\n/g,
+            "<br />",
+          );
           html += `<li>${item}</li>`;
         }
         html += "</ul>";
@@ -899,7 +922,10 @@ function renderMarkdownLite(text) {
           const mm = /^\s*\d+\.\s+(.+)\s*$/.exec(line);
           if (mm) {
             if (current) {
-              const item = renderInlineMarkdown(escapeHtml(current)).replace(/\n/g, "<br />");
+              const item = renderInlineMarkdown(escapeHtml(current)).replace(
+                /\n/g,
+                "<br />",
+              );
               html += `<li>${item}</li>`;
             }
             current = mm[1];
@@ -910,7 +936,10 @@ function renderMarkdownLite(text) {
           }
         }
         if (current) {
-          const item = renderInlineMarkdown(escapeHtml(current)).replace(/\n/g, "<br />");
+          const item = renderInlineMarkdown(escapeHtml(current)).replace(
+            /\n/g,
+            "<br />",
+          );
           html += `<li>${item}</li>`;
         }
         html += "</ol>";
@@ -919,38 +948,42 @@ function renderMarkdownLite(text) {
           .map((line) => line.replace(/^\s*> ?/, ""))
           .join("\n")
           .trimEnd();
-        const escaped = renderInlineMarkdown(escapeHtml(quoted)).replace(/\n/g, "<br />");
+        const escaped = renderInlineMarkdown(escapeHtml(quoted)).replace(
+          /\n/g,
+          "<br />",
+        );
         html += `<blockquote><p>${escaped}</p></blockquote>`;
       } else if (hasHeading || hasRule || hasQuote) {
         let paragraph = [];
         let quoteBuffer = [];
-
         const flushParagraph = () => {
           if (!paragraph.length) return;
           const text = paragraph.join("\n").trimEnd();
-          const escaped = renderInlineMarkdown(escapeHtml(text)).replace(/\n/g, "<br />");
+          const escaped = renderInlineMarkdown(escapeHtml(text)).replace(
+            /\n/g,
+            "<br />",
+          );
           html += `<p>${escaped}</p>`;
           paragraph = [];
         };
-
         const flushQuote = () => {
           if (!quoteBuffer.length) return;
           const text = quoteBuffer.join("\n").trimEnd();
-          const escaped = renderInlineMarkdown(escapeHtml(text)).replace(/\n/g, "<br />");
+          const escaped = renderInlineMarkdown(escapeHtml(text)).replace(
+            /\n/g,
+            "<br />",
+          );
           html += `<blockquote><p>${escaped}</p></blockquote>`;
           quoteBuffer = [];
         };
-
         for (const line of lines) {
           const raw = line || "";
           const trimmedLine = raw.trim();
-
           if (!trimmedLine) {
             flushQuote();
             flushParagraph();
             continue;
           }
-
           const headingMatch = /^ {0,3}(#{1,6})\s+(.+)$/.exec(trimmedLine);
           if (headingMatch) {
             flushQuote();
@@ -961,36 +994,36 @@ function renderMarkdownLite(text) {
             html += `<h${level}>${escaped}</h${level}>`;
             continue;
           }
-
           if (/^ {0,3}(-{3,}|\*{3,}|_{3,})$/.test(trimmedLine)) {
             flushQuote();
             flushParagraph();
             html += "<hr />";
             continue;
           }
-
           if (/^\s*>/.test(raw)) {
             flushParagraph();
             quoteBuffer.push(raw.replace(/^\s*> ?/, ""));
             continue;
           }
-
           flushQuote();
           paragraph.push(raw);
         }
-
         flushQuote();
         flushParagraph();
       } else {
-        const escaped = renderInlineMarkdown(escapeHtml(trimmed)).replace(/\n/g, "<br />");
+        const escaped = renderInlineMarkdown(escapeHtml(trimmed)).replace(
+          /\n/g,
+          "<br />",
+        );
         html += `<p>${escaped}</p>`;
       }
     }
   }
-
-  return html || `<p>${renderInlineMarkdown(escapeHtml(src)).replace(/\n/g, "<br />")}</p>`;
+  return (
+    html ||
+    `<p>${renderInlineMarkdown(escapeHtml(src)).replace(/\n/g, "<br />")}</p>`
+  );
 }
-
 async function copyToClipboard(text) {
   const value = String(text || "");
   if (!value) return false;
@@ -1015,26 +1048,20 @@ async function copyToClipboard(text) {
     }
   }
 }
-
 function createEmptyStateNode() {
   const wrap = document.createElement("section");
   wrap.className = "empty";
-
   const card = document.createElement("div");
   card.className = "empty__card";
-
   const icon = document.createElement("div");
   icon.className = "empty__icon";
   icon.innerHTML = `<img src="./static/AIlogo.png" alt="AI营销助手" />`;
-
   const title = document.createElement("div");
   title.className = "empty__title";
-  title.textContent = "你好！我是 AI 营销助手";
-
+  title.textContent = "你好！我是AI营销助手";
   const sub = document.createElement("div");
   sub.className = "empty__sub";
-  sub.textContent = "开始对话吧～问题描述包括越多关键信息，回答越精准哈！";
-
+  sub.textContent = "开始对话吧～问题描述包括越多关键信息，回答越精准哈～";
   const createPromptButton = (text, className) => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -1045,7 +1072,6 @@ function createEmptyStateNode() {
     });
     return btn;
   };
-
   const prompts = document.createElement("div");
   prompts.className = "empty__prompts";
   const promptList =
@@ -1055,7 +1081,6 @@ function createEmptyStateNode() {
   promptList.slice(0, 3).forEach((text) => {
     prompts.appendChild(createPromptButton(text, "empty__prompt"));
   });
-
   card.appendChild(icon);
   card.appendChild(title);
   card.appendChild(sub);
@@ -1063,14 +1088,12 @@ function createEmptyStateNode() {
   wrap.appendChild(card);
   return { wrap };
 }
-
 function setInputFromSuggestion(text) {
   el.input.value = text;
   updateTextareaHeight();
   el.input.focus();
   state.promptSelection = { pending: true, value: text };
 }
-
 function pickRandomQuestions(list, count, exclude) {
   const pool = (list || []).filter((item) => item && item !== exclude);
   if (!pool.length) return [];
@@ -1080,12 +1103,10 @@ function pickRandomQuestions(list, count, exclude) {
   }
   return pool.slice(0, Math.max(0, count));
 }
-
 function clearFollowupSuggestions() {
   const existing = el.messages.querySelector(".followup");
   existing?.remove();
 }
-
 function renderFollowupSuggestions(items) {
   clearFollowupSuggestions();
   if (!items || !items.length) return;
@@ -1109,60 +1130,47 @@ function renderFollowupSuggestions(items) {
   el.messages.appendChild(wrap);
   if (shouldAutoScroll(el.messages)) scrollToBottom(el.messages);
 }
-
 function setBubbleContent(bubble, role, content, status) {
   if (role === "assistant") {
     bubble.classList.add("md");
     const isTyping = status === "typing";
-    const thinkingHtml = `
-      <div class="md-typing md-typing--block" aria-live="polite">
-        <span class="md-typing__text">正在思考</span>
-        <span class="md-typing__dot">.</span>
-        <span class="md-typing__dot">.</span>
-        <span class="md-typing__dot">.</span>
-      </div>
-    `;
+    const thinkingHtml = `      <div class="md-typing md-typing--block" aria-live="polite">        <span class="md-typing__text">正在思考</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>      </div>    `;
     if (!content) {
       bubble.innerHTML = isTyping ? thinkingHtml : "";
       return;
     }
     const body = renderMarkdownLite(content || "");
-    bubble.innerHTML = isTyping ? `${body}${thinkingHtml}` : body;
+    bubble.innerHTML = isTyping
+      ? `${body}
+${thinkingHtml}`
+      : body;
   } else {
     bubble.classList.remove("md");
     bubble.textContent = content || "";
   }
 }
-
-function createMessageNode({ role, content, time, status }) {
+function createMessageNode(message) {
+  const { role, content, time, status } = message;
   const wrap = document.createElement("section");
   wrap.className = `msg ${role === "user" ? "msg--user" : "msg--assistant"}`;
-
   const avatar = document.createElement("div");
   avatar.className = `msg__avatar ${role === "user" ? "msg__avatar--user" : "msg__avatar--assistant"}`;
   avatar.textContent = "";
   avatar.setAttribute("aria-hidden", "true");
-
   const contentWrap = document.createElement("div");
   contentWrap.className = "msg__content";
-
   const bubble = document.createElement("div");
   bubble.className = "msg__bubble";
   setBubbleContent(bubble, role, content || "", status);
-
   const meta = document.createElement("div");
   meta.className = "msg__meta";
-
   const tag = document.createElement("span");
   tag.className = "msg__tag";
   tag.textContent = role === "user" ? "你" : "机器人";
-
   const t = document.createElement("span");
   t.textContent = time || "";
-
   meta.appendChild(tag);
   meta.appendChild(t);
-
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
   copyBtn.className = "msg__action";
@@ -1173,17 +1181,65 @@ function createMessageNode({ role, content, time, status }) {
     setTimeout(() => setTips(""), 900);
   });
   meta.appendChild(copyBtn);
-
+  if (role === "assistant") {
+    const likeBtn = document.createElement("button");
+    likeBtn.type = "button";
+    likeBtn.className = "msg__action";
+    likeBtn.textContent = "点赞";
+    likeBtn.setAttribute("data-feedback", "like");
+    likeBtn.addEventListener("click", async () => {
+      if (message.feedback) return;
+      try {
+        await sendFeedback(message, "like");
+        message.feedback = "like";
+        updateFeedbackState(meta, message.feedback, message.status);
+        setTips("感谢反馈");
+      } catch (err) {
+        setTips(`反馈失败：${String(err?.message || err)}`);
+      } finally {
+        setTimeout(() => setTips(""), 1200);
+      }
+    });
+    meta.appendChild(likeBtn);
+    const dislikeBtn = document.createElement("button");
+    dislikeBtn.type = "button";
+    dislikeBtn.className = "msg__action";
+    dislikeBtn.textContent = "点踩";
+    dislikeBtn.setAttribute("data-feedback", "dislike");
+    dislikeBtn.addEventListener("click", async () => {
+      if (message.feedback) return;
+      const reason = window.prompt("请输入原因");
+      if (reason === null) return;
+      const trimmed = reason.trim();
+      if (!trimmed) {
+        setTips("请填写原因");
+        setTimeout(() => setTips(""), 1200);
+        return;
+      }
+      try {
+        await sendFeedback(message, "dislike", trimmed);
+        message.feedback = "dislike";
+        updateFeedbackState(meta, message.feedback, message.status);
+        setTips("已提交反馈");
+      } catch (err) {
+        setTips(`反馈失败：${String(err?.message || err)}`);
+      } finally {
+        setTimeout(() => setTips(""), 1200);
+      }
+    });
+    meta.appendChild(dislikeBtn);
+  }
   if (status === "typing") {
     const spinner = document.createElement("span");
     spinner.className = "msg__spinner";
     spinner.title = "生成中";
     meta.appendChild(spinner);
   }
-
+  if (role === "assistant") {
+    updateFeedbackState(meta, message.feedback, status);
+  }
   contentWrap.appendChild(bubble);
   contentWrap.appendChild(meta);
-
   if (role === "user") {
     wrap.appendChild(contentWrap);
     wrap.appendChild(avatar);
@@ -1191,10 +1247,8 @@ function createMessageNode({ role, content, time, status }) {
     wrap.appendChild(avatar);
     wrap.appendChild(contentWrap);
   }
-
   return { wrap, bubble, meta };
 }
-
 function renderAll() {
   el.messages.innerHTML = "";
   const conv = getActiveConversation();
@@ -1209,7 +1263,6 @@ function renderAll() {
   }
   scrollToBottom(el.messages);
 }
-
 function openSettings() {
   closeChatList();
   if (el.baseUrl) el.baseUrl.value = state.config.baseUrl;
@@ -1223,16 +1276,14 @@ function openSettings() {
   el.modal.setAttribute("aria-hidden", "false");
   setTimeout(() => el.userId?.focus(), 0);
 }
-
 function closeSettings() {
   el.modal.setAttribute("aria-hidden", "true");
 }
-
 function updateTextareaHeight() {
   el.input.style.height = "auto";
-  el.input.style.height = `${Math.min(el.input.scrollHeight, window.innerHeight * 0.4)}px`;
+  el.input.style.height = `${Math.min(el.input.scrollHeight, window.innerHeight * 0.4)}
+px`;
 }
-
 function updatePlatformUI() {
   if (el.platform) {
     el.platform.value = "agent";
@@ -1250,24 +1301,16 @@ function updatePlatformUI() {
     }
   }
 }
-
-const imageViewerState = {
-  scale: 1,
-  baseScale: 1,
-  startDist: 0,
-};
-
+const imageViewerState = { scale: 1, baseScale: 1, startDist: 0 };
 function setImageScale(scale) {
   imageViewerState.scale = Math.max(1, Math.min(3, scale));
   el.imageViewerImg.style.transform = `scale(${imageViewerState.scale})`;
 }
-
 function getTouchDistance(t1, t2) {
   const dx = t1.clientX - t2.clientX;
   const dy = t1.clientY - t2.clientY;
   return Math.hypot(dx, dy);
 }
-
 function openImageViewer(src, alt) {
   if (!el.imageViewer || !el.imageViewerImg) return;
   el.imageViewerImg.src = src;
@@ -1275,23 +1318,28 @@ function openImageViewer(src, alt) {
   setImageScale(1);
   el.imageViewer.setAttribute("aria-hidden", "false");
 }
-
 function closeImageViewer() {
   if (!el.imageViewer || !el.imageViewerImg) return;
   el.imageViewer.setAttribute("aria-hidden", "true");
   el.imageViewerImg.src = "";
   setImageScale(1);
 }
-
 function updateVhVar() {
   const h = window.visualViewport?.height || window.innerHeight;
-  document.documentElement.style.setProperty("--vh", `${h * 0.01}px`);
+  document.documentElement.style.setProperty(
+    "--vh",
+    `${h * 0.01}
+px`,
+  );
 }
-
 function getUserMeta() {
   const info = state.platformUser || {};
-  const userName = String(info.userName || info.name || info.username || "").trim();
-  const org = String(info.org || info.departmentName || info.orgName || "").trim();
+  const userName = String(
+    info.userName || info.name || info.username || "",
+  ).trim();
+  const org = String(
+    info.org || info.departmentName || info.orgName || "",
+  ).trim();
   const phone = String(info.phone || info.mobile || "").trim();
   return {
     userName: userName || DEFAULT_USER_META.userName,
@@ -1299,23 +1347,23 @@ function getUserMeta() {
     phone: phone || DEFAULT_USER_META.phone,
   };
 }
-
 function updateUserInfoDisplay() {
   if (!el.userInfoName && !el.userInfoPhone && !el.userInfoOrg) return;
   const info = state.platformUser || {};
-  const nameRaw = String(info.userName || info.name || info.username || "").trim();
-  const orgRaw = String(info.org || info.departmentName || info.orgName || "").trim();
+  const nameRaw = String(
+    info.userName || info.name || info.username || "",
+  ).trim();
+  const orgRaw = String(
+    info.org || info.departmentName || info.orgName || "",
+  ).trim();
   const phoneRaw = String(info.phone || info.mobile || "").trim();
-
   const nameText = nameRaw || `${DEFAULT_USER_META.userName}（默认）`;
   const orgText = orgRaw || `${DEFAULT_USER_META.org}（默认）`;
   const phoneText = phoneRaw || `${DEFAULT_USER_META.phone}（默认）`;
-
   if (el.userInfoName) el.userInfoName.textContent = nameText;
   if (el.userInfoOrg) el.userInfoOrg.textContent = orgText;
   if (el.userInfoPhone) el.userInfoPhone.textContent = phoneText;
 }
-
 function updateAuthDisplay() {
   if (
     !el.authCodeValue &&
@@ -1341,19 +1389,20 @@ function updateAuthDisplay() {
   if (el.authCodeValue) el.authCodeValue.textContent = codeText;
   if (el.authStateValue) el.authStateValue.textContent = stateText;
   if (el.authAccessTokenValue) el.authAccessTokenValue.textContent = accessText;
-  if (el.authRefreshTokenValue) el.authRefreshTokenValue.textContent = refreshText;
+  if (el.authRefreshTokenValue)
+    el.authRefreshTokenValue.textContent = refreshText;
 }
-
 async function fetchAuthConfig() {
   const url = `${getStoreBase()}/auth-config`;
-  const res = await fetch(url, { headers: { "Content-Type": "application/json" } });
+  const res = await fetch(url, {
+    headers: { "Content-Type": "application/json" },
+  });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(txt || res.statusText || "auth config failed");
   }
   return res.json().catch(() => ({}));
 }
-
 async function exchangeAuthToken(code, redirectUri) {
   const url = `${getStoreBase()}/auth-token`;
   const res = await fetch(url, {
@@ -1367,14 +1416,11 @@ async function exchangeAuthToken(code, redirectUri) {
   }
   return res.json().catch(() => ({}));
 }
-
 async function fetchAuthUserInfo(accessToken) {
   const url = `${getStoreBase()}/auth-userinfo`;
   const res = await fetch(url, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-    },
+    headers: { Authorization: `Bearer ${accessToken}` },
   });
   const text = await res.text().catch(() => "");
   let data = null;
@@ -1388,23 +1434,18 @@ async function fetchAuthUserInfo(accessToken) {
       ok: false,
       status: res.status,
       errorCode: data?.errorCode ?? null,
-      message: data?.error || text || res.statusText || "userinfo request failed",
+      message:
+        data?.error || text || res.statusText || "userinfo request failed",
       data,
     };
   }
   return { ok: true, status: res.status, data };
 }
-
 function applyUserInfoFromResponse(userInfo) {
   const name = String(userInfo?.name || "").trim();
   const phone = String(userInfo?.phone_number || "").trim();
   const org = String(userInfo?.orgName || "").trim();
-  state.platformUser = {
-    userName: name,
-    phone,
-    org,
-    raw: userInfo || {},
-  };
+  state.platformUser = { userName: name, phone, org, raw: userInfo || {} };
   updateUserInfoDisplay();
   if (phone) {
     state.config.userId = phone;
@@ -1412,7 +1453,6 @@ function applyUserInfoFromResponse(userInfo) {
     updateConversationList();
   }
 }
-
 async function tryLoginWithStoredToken() {
   const accessToken = String(state.auth?.accessToken || "");
   if (!accessToken) {
@@ -1429,7 +1469,6 @@ async function tryLoginWithStoredToken() {
   setTips(`获取用户信息失败：${String(result.message || "")}`);
   return { ok: false, needsAuth: false, reason: "other_error" };
 }
-
 async function startAuthFlow() {
   try {
     const cfg = await fetchAuthConfig();
@@ -1437,27 +1476,22 @@ async function startAuthFlow() {
     const clientId = String(cfg?.clientId || "").trim();
     const redirectUri = String(cfg?.redirectUri || "").trim();
     const scope = String(cfg?.scope || "").trim();
-
     if (!authorizeUrlBase || !clientId || !redirectUri || !scope) {
       setTips("认证配置不完整，请检查环境变量。");
       return;
     }
-
-  const stateValue = `state-${Date.now().toString(36)}-${Math.random()
-    .toString(16)
-    .slice(2, 10)}`;
-  state.auth = {
-    code: "",
-    state: stateValue,
-    accessToken: "",
-    refreshToken: "",
-    tokenType: "",
-    expiresIn: 0,
-    receivedAt: 0,
-  };
+    const stateValue = `state-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
+    state.auth = {
+      code: "",
+      state: stateValue,
+      accessToken: "",
+      refreshToken: "",
+      tokenType: "",
+      expiresIn: 0,
+      receivedAt: 0,
+    };
     saveAuthState(state.auth);
     updateAuthDisplay();
-
     const url = new URL(authorizeUrlBase);
     url.searchParams.set("client_id", clientId);
     url.searchParams.set("redirect_uri", redirectUri);
@@ -1469,38 +1503,29 @@ async function startAuthFlow() {
     setTips(`认证失败：${String(err?.message || err)}`);
   }
 }
-
 function captureAuthCodeFromUrl() {
   const params = new URLSearchParams(window.location.search || "");
   const code = params.get("code");
   const returnedState = params.get("state");
   if (!code) return false;
-
   const expectedState = String(state.auth?.state || "");
   if (expectedState && returnedState && expectedState !== returnedState) {
     // eslint-disable-next-line no-console
     console.warn("[Auth] state mismatch", { expectedState, returnedState });
-    state.auth = {
-      ...state.auth,
-      code: "",
-      state: "",
-      receivedAt: 0,
-    };
+    state.auth = { ...state.auth, code: "", state: "", receivedAt: 0 };
     saveAuthState(state.auth);
     updateAuthDisplay();
     return false;
   }
-
   state.auth = {
     ...state.auth,
     code,
     state: returnedState || expectedState || "",
     receivedAt: Date.now(),
   };
-
-  const cleanUrl = `${window.location.pathname}${window.location.hash || ""}`;
+  const cleanUrl = `${window.location.pathname}
+${window.location.hash || ""}`;
   window.history.replaceState({}, "", cleanUrl);
-
   fetchAuthConfig()
     .then((cfg) => String(cfg?.redirectUri || "").trim())
     .then((redirectUri) => exchangeAuthToken(code, redirectUri))
@@ -1539,12 +1564,10 @@ function captureAuthCodeFromUrl() {
       }
       updateAuthDisplay();
     });
-
   saveAuthState(state.auth);
   updateAuthDisplay();
   return true;
 }
-
 async function createAgentThread(title) {
   const url = `${getStoreBase()}/alt-thread`;
   const payload = {
@@ -1553,18 +1576,17 @@ async function createAgentThread(title) {
     metadata: getUserMeta(),
   };
   console.log("[Chatbot] create thread payload:", payload);
-
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`创建对话失败（${res.status}）：${txt || res.statusText || "Unknown error"}`);
+    throw new Error(
+      `创建对话失败（${res.status}）：${txt || res.statusText || "Unknown error"}`,
+    );
   }
-
   const data = await res.json().catch(() => ({}));
   const threadId = String(data?.id || "");
   if (!threadId) {
@@ -1572,7 +1594,6 @@ async function createAgentThread(title) {
   }
   return threadId;
 }
-
 async function agentChat({ query, signal, threadId }) {
   const url = `${getStoreBase()}/alt-chat`;
   const config = { thread_id: threadId || null };
@@ -1584,17 +1605,19 @@ async function agentChat({ query, signal, threadId }) {
     body: JSON.stringify(payload),
     signal,
   });
-
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`请求失败（${res.status}）：${txt || res.statusText || "Unknown error"}`);
+    throw new Error(
+      `请求失败（${res.status}）：${txt || res.statusText || "Unknown error"}`,
+    );
   }
-
   const data = await res.json().catch(() => ({}));
-  return { answer: String(data?.answer || data?.message || data?.content || "") };
+  return {
+    answer: String(data?.answer || data?.message || data?.content || ""),
+    externalMessageId: String(data?.externalMessageId || ""),
+  };
 }
-
-async function agentChatStream({ query, signal, onDelta, threadId }) {
+async function agentChatStream({ query, signal, onDelta, onMeta, threadId }) {
   const url = `${getStoreBase()}/alt-chat-stream`;
   const config = { thread_id: threadId || null };
   const payload = { query, config };
@@ -1605,94 +1628,123 @@ async function agentChatStream({ query, signal, onDelta, threadId }) {
     body: JSON.stringify(payload),
     signal,
   });
-
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw new Error(`请求失败（${res.status}）：${txt || res.statusText || "Unknown error"}`);
+    throw new Error(
+      `请求失败（${res.status}）：${txt || res.statusText || "Unknown error"}`,
+    );
   }
-
+  let sawChunk = false;
+  const handlePayload = (data) => {
+    if (!data || typeof data !== "object") return;
+    if (data.event === "meta") {
+      const messageId = data.messageId ?? data.externalMessageId;
+      if (messageId !== undefined && messageId !== null) {
+        onMeta?.(String(messageId));
+      }
+      return;
+    }
+    const messageId = data.messageId ?? data.externalMessageId;
+    if (messageId !== undefined && messageId !== null) {
+      onMeta?.(String(messageId));
+    }
+    const event = String(data.event || "");
+    const chunk = String(data.answer || data.content || data.message || "");
+    if (!chunk) return;
+    if (event && event !== "message") return;
+    sawChunk = true;
+    onDelta?.(chunk);
+  };
+  const handleFrame = (frame) => {
+    const lines = frame.split("\n").filter(Boolean);
+    const dataLines = [];
+    for (const line of lines) {
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    }
+    const dataRaw = dataLines.length ? dataLines.join("\n").trim() : frame.trim();
+    if (!dataRaw || dataRaw === "[DONE]") return;
+    const data = safeJsonParse(dataRaw, null);
+    if (data) {
+      handlePayload(data);
+      return;
+    }
+    const stripped = dataRaw
+      .replace(/^event:.*$/gim, "")
+      .replace(/^data:\s*/gim, "")
+      .trim();
+    if (!stripped || stripped === "[DONE]") return;
+    sawChunk = true;
+    onDelta?.(stripped);
+  };
+  const handleTextResponse = (text) => {
+    const normalized = String(text || "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\r/g, "\n");
+    if (!normalized.trim()) return;
+    const frames = normalized.split("\n\n");
+    for (const frame of frames) {
+      if (frame.trim()) handleFrame(frame);
+    }
+    if (!sawChunk && normalized.trim()) {
+      onDelta?.(normalized.trim());
+    }
+  };
   const reader = res.body?.getReader();
   if (!reader) {
-    const data = await res.json().catch(() => ({}));
-    onDelta?.(String(data?.answer || ""));
+    const text = await res.text().catch(() => "");
+    handleTextResponse(text);
     return;
   }
-
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
-
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
     let idx;
     while ((idx = buffer.indexOf("\n\n")) >= 0) {
       const frame = buffer.slice(0, idx);
       buffer = buffer.slice(idx + 2);
-
-      const lines = frame.split("\n").filter(Boolean);
-      const dataLines = [];
-      for (const line of lines) {
-        if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-      }
-
-      const dataRaw = dataLines.join("\n").trim();
-      if (!dataRaw) continue;
-      if (dataRaw === "[DONE]") continue;
-
-      const data = safeJsonParse(dataRaw, null);
-      if (!data) continue;
-      if (data.event === "message") {
-        const chunk = String(data.answer || "");
-        if (chunk) onDelta?.(chunk);
-      }
+      if (frame.trim()) handleFrame(frame);
     }
   }
+  if (buffer.trim()) {
+    handleFrame(buffer);
+  }
 }
-
 function setBusy(busy) {
   el.sendBtn.disabled = busy;
   el.stopBtn.hidden = !busy;
 }
-
 function updateScrollButton() {
   const show = !shouldAutoScroll(el.messages);
   el.scrollBtn.hidden = !show;
 }
-
 async function sendMessage() {
   if (state.inFlight) return;
-
   const text = String(el.input.value || "").trim();
   if (!text) return;
   const fromSuggestion =
     state.promptSelection?.pending && state.promptSelection.value === text;
   state.promptSelection = { pending: false, value: "" };
   clearFollowupSuggestions();
-
   if (!isConfigured(state.config)) {
     setTips("请先在“设置”里填写配置。");
     openSettings();
     return;
   }
-
   setTips("");
   el.input.value = "";
   updateTextareaHeight();
-
   const conv = getActiveConversation();
   const autoScroll = shouldAutoScroll(el.messages);
-
   if (!conv.messages.length) {
     el.messages.innerHTML = "";
   }
-
   if (!conv.platform) {
     conv.platform = "agent";
   }
-
   conv.messages.push({ role: "user", content: text, time: nowTime() });
   conv.updatedAt = Date.now();
   if (conv.title === "新对话") {
@@ -1710,22 +1762,25 @@ async function sendMessage() {
   }
   const userNode = createMessageNode(conv.messages[conv.messages.length - 1]);
   el.messages.appendChild(userNode.wrap);
-
-  const assistantMsg = { role: "assistant", content: "", time: nowTime(), status: "typing" };
+  const assistantMsg = {
+    role: "assistant",
+    content: "",
+    time: nowTime(),
+    status: "typing",
+    feedback: "",
+    externalMessageId: "",
+  };
   conv.messages.push(assistantMsg);
   conv.updatedAt = Date.now();
   const assistantNode = createMessageNode(assistantMsg);
   el.messages.appendChild(assistantNode.wrap);
-
   if (autoScroll) scrollToBottom(el.messages);
   updateScrollButton();
   saveConversations();
   updateConversationList();
-
   const controller = new AbortController();
   state.inFlight = controller;
   setBusy(true);
-
   try {
     if (!conv.conversationId) {
       throw new Error("无法创建对话 ID");
@@ -1734,6 +1789,12 @@ async function sendMessage() {
       query: text,
       signal: controller.signal,
       threadId: conv.conversationId,
+      onMeta: (messageId) => {
+        if (!assistantMsg.externalMessageId && messageId) {
+          assistantMsg.externalMessageId = String(messageId);
+          saveConversations();
+        }
+      },
       onDelta: (chunk) => {
         assistantMsg.content += chunk;
         setBubbleContent(
@@ -1746,10 +1807,19 @@ async function sendMessage() {
         updateScrollButton();
       },
     });
-
     assistantMsg.status = "done";
     assistantNode.meta.querySelector(".msg__spinner")?.remove();
-    setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content, assistantMsg.status);
+    setBubbleContent(
+      assistantNode.bubble,
+      "assistant",
+      assistantMsg.content,
+      assistantMsg.status,
+    );
+    updateFeedbackState(
+      assistantNode.meta,
+      assistantMsg.feedback,
+      assistantMsg.status,
+    );
     updateScrollButton();
     conv.updatedAt = Date.now();
     if (conv.title === "新对话") {
@@ -1768,8 +1838,18 @@ async function sendMessage() {
     if (err?.name === "AbortError") {
       assistantMsg.status = "done";
       assistantMsg.content = assistantMsg.content || "（已停止）";
-      setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content, assistantMsg.status);
+      setBubbleContent(
+        assistantNode.bubble,
+        "assistant",
+        assistantMsg.content,
+        assistantMsg.status,
+      );
       assistantNode.meta.querySelector(".msg__spinner")?.remove();
+      updateFeedbackState(
+        assistantNode.meta,
+        assistantMsg.feedback,
+        assistantMsg.status,
+      );
       updateScrollButton();
       conv.updatedAt = Date.now();
       saveConversations();
@@ -1777,9 +1857,20 @@ async function sendMessage() {
       setTips("已停止。");
     } else {
       assistantMsg.status = "error";
-      assistantMsg.content = assistantMsg.content || `出错：${String(err?.message || err)}`;
-      setBubbleContent(assistantNode.bubble, "assistant", assistantMsg.content, assistantMsg.status);
+      assistantMsg.content =
+        assistantMsg.content || `出错：${String(err?.message || err)}`;
+      setBubbleContent(
+        assistantNode.bubble,
+        "assistant",
+        assistantMsg.content,
+        assistantMsg.status,
+      );
       assistantNode.meta.querySelector(".msg__spinner")?.remove();
+      updateFeedbackState(
+        assistantNode.meta,
+        assistantMsg.feedback,
+        assistantMsg.status,
+      );
       updateScrollButton();
       conv.updatedAt = Date.now();
       saveConversations();
@@ -1796,13 +1887,11 @@ async function sendMessage() {
     setConnHint();
   }
 }
-
 function stopGeneration() {
   if (!state.inFlight) return;
   state.inFlight.abort();
-  setTips("正在停止…");
+  setTips("正在停止...");
 }
-
 function resetConversation(options) {
   const silent = Boolean(options?.silent);
   const conv = getActiveConversation();
@@ -1815,7 +1904,6 @@ function resetConversation(options) {
   }
   setConnHint();
 }
-
 function clearChat() {
   const conv = getActiveConversation();
   conv.messages = [];
@@ -1830,7 +1918,6 @@ function clearChat() {
   updateConversationList();
   setTips("聊天已清空。");
 }
-
 function clearChatWithConfirm() {
   if (state.inFlight) stopGeneration();
   const conv = getActiveConversation();
@@ -1839,7 +1926,6 @@ function clearChatWithConfirm() {
   resetConversation({ silent: true });
   clearChat();
 }
-
 function newChat() {
   const conv = createConversation({ platform: "agent" });
   state.conversations.unshift(conv);
@@ -1848,9 +1934,7 @@ function newChat() {
   renderAll();
   updateScrollButton();
   updateConversationList();
-}
-
-// Events
+} // Events
 el.sendBtn.addEventListener("click", sendMessage);
 el.stopBtn.addEventListener("click", stopGeneration);
 el.newChatBtn.addEventListener("click", newChat);
@@ -1866,7 +1950,6 @@ el.newChatFromListBtn.addEventListener("click", () => {
   newChat();
   closeChatList();
 });
-
 el.input.addEventListener("input", updateTextareaHeight);
 el.input.addEventListener("keydown", (e) => {
   if (IS_MOBILE) return;
@@ -1875,7 +1958,6 @@ el.input.addEventListener("keydown", (e) => {
     sendMessage();
   }
 });
-
 el.settingsBtn.addEventListener("click", openSettings);
 el.authStartBtn?.addEventListener("click", startAuthFlow);
 el.closeSettingsBtn.addEventListener("click", closeSettings);
@@ -1887,7 +1969,6 @@ document.addEventListener("keydown", (e) => {
     closeImageViewer();
   }
 });
-
 el.settingsForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const cfg = {
@@ -1912,7 +1993,6 @@ el.settingsForm.addEventListener("submit", (e) => {
   setTips(isConfigured(state.config) ? "已保存。" : "请补全配置。");
   closeSettings();
 });
-
 el.resetConversationBtn.addEventListener("click", resetConversation);
 el.clearChatBtn.addEventListener("click", clearChatWithConfirm);
 el.platform.addEventListener("change", updatePlatformUI);
@@ -1920,20 +2000,17 @@ el.imageViewerBackdrop.addEventListener("click", closeImageViewer);
 el.imageViewerContent.addEventListener("click", (e) => {
   if (e.target === el.imageViewerContent) closeImageViewer();
 });
-
 el.messages.addEventListener("click", (e) => {
   const target = e.target;
   if (!(target instanceof HTMLImageElement)) return;
   if (!target.closest(".md")) return;
   openImageViewer(target.src, target.alt || "图片预览");
 });
-
 el.imageViewerImg.addEventListener("touchstart", (e) => {
   if (e.touches.length !== 2) return;
   imageViewerState.startDist = getTouchDistance(e.touches[0], e.touches[1]);
   imageViewerState.baseScale = imageViewerState.scale;
 });
-
 el.imageViewerImg.addEventListener(
   "touchmove",
   (e) => {
@@ -1941,29 +2018,25 @@ el.imageViewerImg.addEventListener(
     e.preventDefault();
     const dist = getTouchDistance(e.touches[0], e.touches[1]);
     if (!imageViewerState.startDist) return;
-    const next = imageViewerState.baseScale * (dist / imageViewerState.startDist);
+    const next =
+      imageViewerState.baseScale * (dist / imageViewerState.startDist);
     setImageScale(next);
   },
   { passive: false },
 );
-
 el.imageViewerImg.addEventListener("touchend", () => {
   if (imageViewerState.scale < 1) setImageScale(1);
   if (imageViewerState.scale > 3) setImageScale(3);
-});
-
-// Init
+}); // Init
 updateVhVar();
 window.visualViewport?.addEventListener("resize", updateVhVar);
 window.addEventListener("resize", updateVhVar);
-
-el.input.placeholder = "询问任何问题…";
+el.input.placeholder = "询问任何问题";
 if (IS_MOBILE) {
   el.input.setAttribute("enterkeyhint", "done");
 } else {
   el.input.setAttribute("enterkeyhint", "send");
 }
-
 async function bootstrap() {
   await initPlatformUser();
   const hasAuthCode = captureAuthCodeFromUrl();
@@ -1978,17 +2051,15 @@ async function bootstrap() {
   if (!hasAuthCode) {
     const result = await tryLoginWithStoredToken();
     if (result.needsAuth) {
-      setTips("认证失效，正在重新认证…");
+      setTips("认证失效，正在重新认证...");
       startAuthFlow();
       return;
     }
   }
   await initConversations();
-
   if (!isConfigured(state.config)) {
     // first visit: guide to settings quickly
     setTimeout(openSettings, 200);
   }
 }
-
 bootstrap();

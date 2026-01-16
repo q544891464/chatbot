@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS messages (
   conversation_id BIGINT UNSIGNED NOT NULL,
   role VARCHAR(16) NOT NULL,
   content MEDIUMTEXT NOT NULL,
+  external_message_id VARCHAR(128) DEFAULT NULL,
   time_label VARCHAR(16) NOT NULL DEFAULT '',
   position INT NOT NULL,
   created_at_ms BIGINT NOT NULL,
