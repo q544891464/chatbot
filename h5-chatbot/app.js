@@ -259,6 +259,13 @@ function saveConversations() {
 
 const initialConfig = loadConfig();
 const initialConversation = createConversation({ platform: "agent" });
+const DEFAULT_QUESTION_BANK = [
+  "干部问责管理",
+  "我想竞选干部，对于青年员工来说要怎么做",
+  "导师课程开发费用",
+  "我今年11岗级，我想晋升到15岗级，我需要满足什么条件呢？",
+  "五险一金的缴纳比例",
+];
 
 const state = {
   config: initialConfig,
@@ -267,6 +274,8 @@ const state = {
   inFlight: null,
   platformUser: null,
   auth: loadAuthState(),
+  questionBank: DEFAULT_QUESTION_BANK.slice(),
+  promptSelection: { pending: false, value: "" },
 };
 
 const IS_MOBILE = (() => {
@@ -311,6 +320,25 @@ async function initConversations() {
   const legacy = safeJsonParse(localStorage.getItem(LEGACY_CHAT_KEY) || "null", null);
   if (legacy) {
     localStorage.removeItem(LEGACY_CHAT_KEY);
+  }
+}
+
+async function loadQuestionBank() {
+  try {
+    const res = await fetch("./question-bank.json", { cache: "no-store" });
+    if (!res.ok) throw new Error("load failed");
+    const data = await res.json();
+    const items = Array.isArray(data)
+      ? data
+      : Array.isArray(data?.items)
+      ? data.items
+      : [];
+    state.questionBank = items.map((item) => String(item).trim()).filter(Boolean);
+    if (!state.questionBank.length) {
+      state.questionBank = DEFAULT_QUESTION_BANK.slice();
+    }
+  } catch {
+    state.questionBank = DEFAULT_QUESTION_BANK.slice();
   }
 }
 
@@ -1007,11 +1035,79 @@ function createEmptyStateNode() {
   sub.className = "empty__sub";
   sub.textContent = "开始对话吧～问题描述包括越多关键信息，回答越精准哈！";
 
+  const createPromptButton = (text, className) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = className;
+    btn.textContent = text;
+    btn.addEventListener("click", () => {
+      setInputFromSuggestion(text);
+    });
+    return btn;
+  };
+
+  const prompts = document.createElement("div");
+  prompts.className = "empty__prompts";
+  const promptList =
+    state.questionBank && state.questionBank.length
+      ? state.questionBank
+      : DEFAULT_QUESTION_BANK;
+  promptList.slice(0, 3).forEach((text) => {
+    prompts.appendChild(createPromptButton(text, "empty__prompt"));
+  });
+
   card.appendChild(icon);
   card.appendChild(title);
   card.appendChild(sub);
+  card.appendChild(prompts);
   wrap.appendChild(card);
   return { wrap };
+}
+
+function setInputFromSuggestion(text) {
+  el.input.value = text;
+  updateTextareaHeight();
+  el.input.focus();
+  state.promptSelection = { pending: true, value: text };
+}
+
+function pickRandomQuestions(list, count, exclude) {
+  const pool = (list || []).filter((item) => item && item !== exclude);
+  if (!pool.length) return [];
+  for (let i = pool.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, Math.max(0, count));
+}
+
+function clearFollowupSuggestions() {
+  const existing = el.messages.querySelector(".followup");
+  existing?.remove();
+}
+
+function renderFollowupSuggestions(items) {
+  clearFollowupSuggestions();
+  if (!items || !items.length) return;
+  const wrap = document.createElement("section");
+  wrap.className = "followup";
+  const title = document.createElement("div");
+  title.className = "followup__title";
+  title.textContent = "猜你想问";
+  const list = document.createElement("div");
+  list.className = "followup__list";
+  items.forEach((text) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "followup__item";
+    btn.textContent = text;
+    btn.addEventListener("click", () => setInputFromSuggestion(text));
+    list.appendChild(btn);
+  });
+  wrap.appendChild(title);
+  wrap.appendChild(list);
+  el.messages.appendChild(wrap);
+  if (shouldAutoScroll(el.messages)) scrollToBottom(el.messages);
 }
 
 function setBubbleContent(bubble, role, content, status) {
@@ -1571,6 +1667,10 @@ async function sendMessage() {
 
   const text = String(el.input.value || "").trim();
   if (!text) return;
+  const fromSuggestion =
+    state.promptSelection?.pending && state.promptSelection.value === text;
+  state.promptSelection = { pending: false, value: "" };
+  clearFollowupSuggestions();
 
   if (!isConfigured(state.config)) {
     setTips("请先在“设置”里填写配置。");
@@ -1657,6 +1757,13 @@ async function sendMessage() {
     }
     saveConversations();
     updateConversationList();
+    if (fromSuggestion) {
+      const pool = state.questionBank.length
+        ? state.questionBank
+        : DEFAULT_QUESTION_BANK;
+      const next = pickRandomQuestions(pool, 3, text);
+      renderFollowupSuggestions(next);
+    }
   } catch (err) {
     if (err?.name === "AbortError") {
       assistantMsg.status = "done";
@@ -1860,6 +1967,7 @@ if (IS_MOBILE) {
 async function bootstrap() {
   await initPlatformUser();
   const hasAuthCode = captureAuthCodeFromUrl();
+  await loadQuestionBank();
   setConnHint();
   renderAll();
   updateTextareaHeight();

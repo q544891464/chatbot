@@ -437,6 +437,8 @@ async function handleConversationsSync(req, res) {
 function extractAltAnswer(data) {
   if (typeof data === "string") return data;
   if (!data || typeof data !== "object") return "";
+  const errorText = extractAltError(data);
+  if (errorText) return errorText;
   const candidates = [
     data.response,
     data.answer,
@@ -468,6 +470,19 @@ function extractAltAnswer(data) {
   } catch {
     return "";
   }
+}
+
+function extractAltError(data) {
+  if (!data || typeof data !== "object") return "";
+  const status = String(data.status || "");
+  if (status !== "error") return "";
+  const msg =
+    data.error_message ||
+    data.errorMessage ||
+    data.message ||
+    data.error?.message ||
+    data.error?.msg;
+  return typeof msg === "string" ? msg.trim() : "";
 }
 
 function stripAltText(text) {
@@ -616,6 +631,12 @@ function consumeAltPayload(state, payload) {
   if (!payload || typeof payload !== "object") return;
   state.hasParsed = true;
   if (hasToolPayload(payload)) {
+    return;
+  }
+  const errorText = extractAltError(payload);
+  if (errorText) {
+    state.finalText = errorText;
+    state.lastPayload = payload;
     return;
   }
   if (payload.response === null) {
@@ -782,6 +803,8 @@ async function handleAltChat(req, res) {
 
 function extractAltChunk(payload) {
   if (!payload || typeof payload !== "object") return null;
+  const errorText = extractAltError(payload);
+  if (errorText) return errorText;
   if (payload.response === null) return null;
   const msgType = String(payload.msg?.type || "");
   const status = String(payload.status || "");
@@ -797,7 +820,7 @@ function extractAltChunk(payload) {
     return null;
   }
   if (hasToolPayload(payload)) return null;
-  if (!(msgType.includes("Chunk") || status === "loading")) return null;
+  if (!(msgType.includes("Chunk") || status === "loading")) return null;        
   const msgContent = typeof payload.msg?.content === "string" ? payload.msg.content : "";
   const response = typeof payload.response === "string" ? payload.response : "";
   const raw = msgContent !== "" ? msgContent : response !== "" ? response : "";
@@ -870,6 +893,7 @@ async function handleAltChatStream(req, res) {
     lastChunk: "",
     toolBlock: false,
     toolDump: false,
+    errorSent: false,
   };
 
   while (true) {
@@ -886,6 +910,14 @@ async function handleAltChatStream(req, res) {
       try {
         const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
         logAltRawPayload(payloadObj);
+        const errorText = extractAltError(payloadObj);
+        if (errorText) {
+          if (!state.errorSent) {
+            state.errorSent = true;
+            res.write(`data: ${JSON.stringify({ event: "message", answer: errorText })}\n\n`);
+          }
+          continue;
+        }
         const chunk = extractAltChunk(payloadObj);
         if (chunk !== null) {
           const delta = appendAltStream(state, chunk);
@@ -903,12 +935,20 @@ async function handleAltChatStream(req, res) {
     try {
       const payloadObj = JSON.parse(buffer.startsWith("data:") ? buffer.slice(5).trim() : buffer);
       logAltRawPayload(payloadObj);
+      const errorText = extractAltError(payloadObj);
+      if (errorText) {
+        if (!state.errorSent) {
+          state.errorSent = true;
+          res.write(`data: ${JSON.stringify({ event: "message", answer: errorText })}\n\n`);
+        }
+      } else {
       const chunk = extractAltChunk(payloadObj);
       if (chunk !== null) {
         const delta = appendAltStream(state, chunk);
         if (delta) {
           res.write(`data: ${JSON.stringify({ event: "message", answer: delta })}\n\n`);
         }
+      }
       }
     } catch {
       // ignore
