@@ -203,6 +203,33 @@
       </div>
     </div>
 
+    <div class="modal" id="feedbackModal" aria-hidden="true">
+      <div class="modal__backdrop" id="feedbackBackdrop"></div>
+      <div class="modal__sheet modal__sheet--feedback" role="dialog" aria-modal="true" aria-labelledby="feedbackTitle">
+        <div class="modal__header">
+          <div class="modal__title" id="feedbackTitle">请填写点踩原因</div>
+          <button class="iconbtn" id="feedbackCloseBtn" type="button">关闭</button>
+        </div>
+        <div class="form feedback-form">
+          <label class="field">
+            <div class="field__label">原因</div>
+            <textarea
+              class="field__input field__textarea"
+              id="feedbackInput"
+              rows="4"
+              placeholder="例如：回答不准确、需要更详细的信息"
+              maxlength="200"
+            ></textarea>
+            <div class="field__hint" id="feedbackHint">请简要说明原因，便于改进。</div>
+          </label>
+          <div class="feedback-actions">
+            <button class="btn ghost" id="feedbackCancelBtn" type="button">取消</button>
+            <button class="btn" id="feedbackSubmitBtn" type="button">提交</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="lightbox" id="imageViewer" aria-hidden="true">
       <div class="lightbox__backdrop" id="imageViewerBackdrop"></div>
       <div class="lightbox__content" id="imageViewerContent" role="dialog" aria-modal="true" aria-label="图片预览">

@@ -35,6 +35,13 @@ const el = {
   closeChatListBtn: document.getElementById("closeChatListBtn"),
   chatList: document.getElementById("chatList"),
   newChatFromListBtn: document.getElementById("newChatFromListBtn"),
+  feedbackModal: document.getElementById("feedbackModal"),
+  feedbackBackdrop: document.getElementById("feedbackBackdrop"),
+  feedbackCloseBtn: document.getElementById("feedbackCloseBtn"),
+  feedbackCancelBtn: document.getElementById("feedbackCancelBtn"),
+  feedbackSubmitBtn: document.getElementById("feedbackSubmitBtn"),
+  feedbackInput: document.getElementById("feedbackInput"),
+  feedbackHint: document.getElementById("feedbackHint"),
   platform: document.getElementById("platform"),
   apiKeyField: document.getElementById("apiKeyField"),
   responseModeField: document.getElementById("responseModeField"),
@@ -281,6 +288,7 @@ const state = {
   questionBank: DEFAULT_QUESTION_BANK.slice(),
   promptSelection: { pending: false, value: "" },
 };
+let feedbackResolve = null;
 const IS_MOBILE = (() => {
   const ua = navigator.userAgent || "";
   const touch = navigator.maxTouchPoints || 0;
@@ -485,6 +493,40 @@ function openChatList() {
 }
 function closeChatList() {
   el.chatListModal.setAttribute("aria-hidden", "true");
+}
+function resetFeedbackHint(text, isError = false) {
+  if (!el.feedbackHint) return;
+  el.feedbackHint.textContent = text;
+  el.feedbackHint.classList.toggle("is-error", isError);
+}
+function openFeedbackModal() {
+  if (!el.feedbackModal || !el.feedbackInput) return Promise.resolve(null);
+  if (feedbackResolve) return Promise.resolve(null);
+  el.feedbackInput.value = "";
+  resetFeedbackHint("请简要说明原因，便于改进。", false);
+  el.feedbackModal.setAttribute("aria-hidden", "false");
+  setTimeout(() => el.feedbackInput.focus(), 0);
+  return new Promise((resolve) => {
+    feedbackResolve = resolve;
+  });
+}
+function closeFeedbackModal(result) {
+  if (!el.feedbackModal) return;
+  el.feedbackModal.setAttribute("aria-hidden", "true");
+  if (feedbackResolve) {
+    const resolve = feedbackResolve;
+    feedbackResolve = null;
+    resolve(result ?? null);
+  }
+}
+function submitFeedbackModal() {
+  if (!el.feedbackInput) return;
+  const reason = el.feedbackInput.value.trim();
+  if (!reason) {
+    resetFeedbackHint("请填写点踩原因。", true);
+    return;
+  }
+  closeFeedbackModal(reason);
 }
 function selectConversation(id) {
   if (id === state.activeId) return;
@@ -1208,11 +1250,11 @@ function createMessageNode(message) {
     dislikeBtn.setAttribute("data-feedback", "dislike");
     dislikeBtn.addEventListener("click", async () => {
       if (message.feedback) return;
-      const reason = window.prompt("请输入原因");
+      const reason = await openFeedbackModal();
       if (reason === null) return;
-      const trimmed = reason.trim();
+      const trimmed = String(reason).trim();
       if (!trimmed) {
-        setTips("请填写原因");
+        setTips("请填写点踩原因");
         setTimeout(() => setTips(""), 1200);
         return;
       }
@@ -1962,11 +2004,19 @@ el.settingsBtn.addEventListener("click", openSettings);
 el.authStartBtn?.addEventListener("click", startAuthFlow);
 el.closeSettingsBtn.addEventListener("click", closeSettings);
 el.backdrop.addEventListener("click", closeSettings);
+el.feedbackBackdrop?.addEventListener("click", () => closeFeedbackModal(null));
+el.feedbackCloseBtn?.addEventListener("click", () => closeFeedbackModal(null));
+el.feedbackCancelBtn?.addEventListener("click", () => closeFeedbackModal(null));
+el.feedbackSubmitBtn?.addEventListener("click", submitFeedbackModal);
+el.feedbackInput?.addEventListener("input", () => {
+  resetFeedbackHint("请简要说明原因，便于改进。", false);
+});
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeSettings();
     closeChatList();
     closeImageViewer();
+    closeFeedbackModal(null);
   }
 });
 el.settingsForm.addEventListener("submit", (e) => {

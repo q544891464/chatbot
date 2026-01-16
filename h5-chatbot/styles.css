@@ -642,6 +642,9 @@ body{
 .modal__sheet--list{
   max-height: min(80vh, 560px);
 }
+.modal__sheet--feedback{
+  max-height: min(70vh, 520px);
+}
 
 .chatlist{
   padding: 12px;
@@ -695,6 +698,11 @@ body{
   outline:none;
   font-size: 14px;
 }
+.field__textarea{
+  min-height: 96px;
+  resize: none;
+  line-height: 1.5;
+}
 .field__input:focus{
   border-color: rgba(37,99,235,0.30);
   outline: 3px solid rgba(37,99,235,0.15);
@@ -703,6 +711,14 @@ body{
   font-size: 12px;
   color: var(--muted);
   line-height: 1.4;
+}
+.field__hint.is-error{
+  color: rgba(185,28,28,0.95);
+}
+.feedback-actions{
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 .user-info{
   border: 1px solid rgba(229,231,235,0.9);
