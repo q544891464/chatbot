@@ -1120,10 +1120,10 @@ function createEmptyStateNode() {
   card.className = "empty__card";
   const icon = document.createElement("div");
   icon.className = "empty__icon";
-  icon.innerHTML = `<img src="./static/AIlogo.png" alt="AI人力助手" />`;
+  icon.innerHTML = `<img src="./static/AIlogo.png" alt="AI产数产品助手" />`;
   const title = document.createElement("div");
   title.className = "empty__title";
-  title.textContent = "你好！我是AI人力助手";
+  title.textContent = "你好！我是AI产数产品助手";
   const sub = document.createElement("div");
   sub.className = "empty__sub";
   sub.textContent = "开始对话吧～问题描述包括越多关键信息，回答越精准哈～";
