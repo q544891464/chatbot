@@ -1332,6 +1332,53 @@ async function handleFeedback(req, res) {
   }
 }
 
+async function handleFeedbackStatus(req, res, messageId) {
+  const trimmedId = String(messageId || "").trim();
+  if (!trimmedId) {
+    sendJson(res, 400, { error: "Missing messageId" });
+    return;
+  }
+
+  const feedbackUrl = getFeedbackUrl(trimmedId);
+  if (!feedbackUrl) {
+    sendJson(res, 500, { error: "Feedback base URL not configured" });
+    return;
+  }
+
+  let token = "";
+  try {
+    token = await getAltAuthToken();
+  } catch (err) {
+    sendJson(res, 500, { error: String(err?.message || err) });
+    return;
+  }
+
+  const cookieHeader = String(req.headers.cookie || "");
+  const upstreamRes = await fetch(feedbackUrl, {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+    },
+  });
+
+  const text = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    sendJson(res, upstreamRes.status, {
+      error: text || upstreamRes.statusText || "Feedback status request failed",
+    });
+    return;
+  }
+
+  try {
+    const data = JSON.parse(text || "{}");
+    sendJson(res, 200, data);
+  } catch {
+    sendJson(res, 200, { raw: text });
+  }
+}
+
 async function handleStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
   let pathname = decodeURIComponent(url.pathname || "/");
@@ -1402,9 +1449,15 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/feedback") {
-      await handleFeedback(req, res);
-      return;
+    if (url.pathname === "/api/feedback") {
+      if (req.method === "POST") {
+        await handleFeedback(req, res);
+        return;
+      }
+      if (req.method === "GET") {
+        await handleFeedbackStatus(req, res, url.searchParams.get("messageId"));
+        return;
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/api/conversations") {

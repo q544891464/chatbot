@@ -402,6 +402,14 @@ async function sendFeedback(message, rating, reason) {
     throw new Error(txt || res.statusText || "反馈失败");
   }
 }
+async function fetchFeedbackStatus(message) {
+  const id = await ensureFeedbackId(message);
+  if (!id) return null;
+  const url = `${getFeedbackUrl()}?messageId=${encodeURIComponent(id)}`;
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) return null;
+  return res.json().catch(() => ({}));
+}
 function updateFeedbackState(meta, feedback, status) {
   const likeBtn = meta.querySelector('[data-feedback="like"]');
   const dislikeBtn = meta.querySelector('[data-feedback="dislike"]');
@@ -413,6 +421,19 @@ function updateFeedbackState(meta, feedback, status) {
   if (dislikeBtn) {
     dislikeBtn.disabled = disabled;
     dislikeBtn.classList.toggle("is-active", feedback === "dislike");
+  }
+}
+function updateFeedbackReason(contentWrap, reason) {
+  if (!contentWrap) return;
+  const elReason = contentWrap.querySelector(".msg__feedback-reason");
+  if (!elReason) return;
+  const text = String(reason || "").trim();
+  if (text) {
+    elReason.textContent = `原因：${text}`;
+    elReason.hidden = false;
+  } else {
+    elReason.textContent = "";
+    elReason.hidden = true;
   }
 }
 function getPlatformLabel(platform) {
@@ -1236,7 +1257,9 @@ function createMessageNode(message) {
       try {
         await sendFeedback(message, "like");
         message.feedback = "like";
+        message.feedbackReason = "";
         updateFeedbackState(meta, message.feedback, message.status);
+        updateFeedbackReason(contentWrap, message.feedbackReason);
         setTips("感谢反馈");
       } catch (err) {
         setTips(`反馈失败：${String(err?.message || err)}`);
@@ -1263,7 +1286,9 @@ function createMessageNode(message) {
       try {
         await sendFeedback(message, "dislike", trimmed);
         message.feedback = "dislike";
+        message.feedbackReason = trimmed;
         updateFeedbackState(meta, message.feedback, message.status);
+        updateFeedbackReason(contentWrap, message.feedbackReason);
         setTips("已提交反馈");
       } catch (err) {
         setTips(`反馈失败：${String(err?.message || err)}`);
@@ -1284,12 +1309,29 @@ function createMessageNode(message) {
   }
   contentWrap.appendChild(bubble);
   contentWrap.appendChild(meta);
+  const reasonEl = document.createElement("div");
+  reasonEl.className = "msg__feedback-reason";
+  contentWrap.appendChild(reasonEl);
+  updateFeedbackReason(contentWrap, message.feedbackReason);
   if (role === "user") {
     wrap.appendChild(contentWrap);
     wrap.appendChild(avatar);
   } else {
     wrap.appendChild(avatar);
     wrap.appendChild(contentWrap);
+  }
+  if (role === "assistant" && !message.feedbackLoaded) {
+    message.feedbackLoaded = true;
+    fetchFeedbackStatus(message)
+      .then((data) => {
+        if (!data || !data.has_feedback || !data.feedback) return;
+        message.feedback = String(data.feedback.rating || "").trim();
+        message.feedbackReason = String(data.feedback.reason || "").trim();
+        updateFeedbackState(meta, message.feedback, message.status);
+        updateFeedbackReason(contentWrap, message.feedbackReason);
+        saveConversations();
+      })
+      .catch(() => {});
   }
   return { wrap, bubble, meta };
 }
@@ -1812,6 +1854,8 @@ async function sendMessage() {
     time: nowTime(),
     status: "typing",
     feedback: "",
+    feedbackReason: "",
+    feedbackLoaded: false,
     externalMessageId: "",
   };
   conv.messages.push(assistantMsg);
