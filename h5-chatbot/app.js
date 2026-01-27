@@ -2068,7 +2068,7 @@ document.addEventListener("keydown", (e) => {
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
-    stabilizeComposerHeight();
+    updateScrollButton();
   }
 });
 el.settingsForm.addEventListener("submit", (e) => {
