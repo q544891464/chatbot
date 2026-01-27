@@ -288,6 +288,8 @@ const state = {
   questionBank: DEFAULT_QUESTION_BANK.slice(),
   promptSelection: { pending: false, value: "" },
 };
+let composerObserver = null;
+let composerHeightRaf = 0;
 let feedbackResolve = null;
 const IS_MOBILE = (() => {
   const ua = navigator.userAgent || "";
@@ -1985,6 +1987,7 @@ el.scrollBtn.addEventListener("click", () => {
   updateScrollButton();
 });
 el.messages.addEventListener("scroll", updateScrollButton, { passive: true });
+el.messages.addEventListener("scroll", updateScrollButton, { passive: true });
 el.chatListBtn.addEventListener("click", openChatList);
 el.closeChatListBtn.addEventListener("click", closeChatList);
 el.chatListBackdrop.addEventListener("click", closeChatList);
@@ -2017,6 +2020,11 @@ document.addEventListener("keydown", (e) => {
     closeChatList();
     closeImageViewer();
     closeFeedbackModal(null);
+  }
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
+    stabilizeComposerHeight();
   }
 });
 el.settingsForm.addEventListener("submit", (e) => {

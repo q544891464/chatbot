@@ -11,6 +11,7 @@
   --shadow: 0 14px 35px rgba(17,24,39,0.10);
   --radius: 16px;
   --topbar-h: 64px;
+  --composer-h: 120px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
 }
@@ -136,7 +137,7 @@ body{
 .messages{
   flex:1;
   overflow:auto;
-  padding: 14px 12px calc(120px + var(--safe-b));
+  padding: 14px 12px calc(128px + var(--safe-b));
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
 }
@@ -517,7 +518,7 @@ body{
   right: 0;
   bottom: 0;
   z-index: 30;
-  padding: 12px 12px calc(10px + var(--safe-b));
+  padding: 12px 12px calc(18px + var(--safe-b));
   border-top: 1px solid rgba(229,231,235,0.8);
   background: rgba(255,255,255,0.88);
   backdrop-filter: blur(12px);
@@ -815,5 +816,7 @@ body{
     transform: translateX(-50%);
     width: 720px;
   }
-  .messages{ padding: 18px 16px; }
+  .messages{
+    padding: 18px 16px calc(128px + var(--safe-b));
+  }
 }
