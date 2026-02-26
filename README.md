@@ -1,40 +1,130 @@
-# H5 Chatbot（Dify）
+﻿# AI 人力助手（H5 Chatbot）
 
-一个适配手机的 H5 聊天机器人示例：
+移动端优先的 H5 聊天机器人项目，前端与后端代理一体化部署，支持：
 
-- 前端：`h5-chatbot/`（移动端 UI）
-- 后端代理：`server/server.js`（隐藏 Dify Key + 解决 CORS）
+- ChatbotAgent 流式对话
+- OAuth 登录（授权码 + token + userinfo）
+- 会话持久化（MySQL）
+- 点赞 / 点踩反馈
+- Markdown / 图片展示
 
-## 运行
+## 目录结构
 
-推荐直接启动后端代理（会同时提供静态页面 + `/api` 代理）：
+```text
+h5-chatbot/
+  index.html
+  styles.css
+  app.js                 # 页面主入口（已拆分）
+  auth.js                # OAuth 认证相关
+  chat-api.js            # 聊天接口调用
+  feedback.js            # 点赞点踩与状态
+  markdown.js            # Markdown 渲染
+  utils.js               # 通用工具函数
+  platform-bridge.js     # 平台用户信息桥接
+  question-bank.json     # 问题库
+  static/
 
-PowerShell：
+server/
+  server.js              # Node 代理服务
+  start.ps1              # Windows 启动脚本（自动加载 .env）
+  .env.example
+  sql/init.sql           # MySQL 初始化脚本
+```
+
+## 环境准备
+
+- Node.js 18+
+- MySQL 8+
+
+安装依赖：
+
+```bash
+npm install
+```
+
+## 配置
+
+1. 复制模板：
+
+```bash
+cp server/.env.example server/.env
+```
+
+2. 按需修改 `server/.env`，重点项：
+
+- `PORT`（默认 `8787`）
+- `ALT_API_URL` / `ALT_THREAD_URL` / `ALT_AGENT_ID`
+- `ALT_AUTH_URL` / `ALT_AUTH_USERNAME` / `ALT_AUTH_PASSWORD` / `ALT_AUTH_CLIENT_SECRET`
+- `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME`
+- `AUTH_SERVER_DOMAIN` / `AUTH_CLIENT_ID` / `AUTH_CLIENT_SECRET` / `AUTH_REDIRECT_URI`
+- `CORS_ORIGIN`
+
+## MySQL 初始化
+
+执行：
+
+```sql
+source server/sql/init.sql;
+```
+
+或手动导入 `server/sql/init.sql`。
+
+## 启动方式
+
+### Windows（推荐）
 
 ```powershell
 cd d:\Code\chatbot
-# 推荐：把密钥写到 server/.env（已在 .gitignore 中忽略，不要提交到 git）
-Copy-Item server\.env.example server\.env -Force
-# 编辑 server/.env，把 DIFY_API_KEY 改成你自己的 app-...；DIFY_BASE_URL 可保持默认或改成你的地址
 .\server\start.ps1
 ```
 
-然后用浏览器打开：`http://localhost:8787/`
+脚本会自动读取：
 
-## 配置 Dify
+- `server/.env`
+- 项目根目录 `.env`（如存在）
 
-打开页面后点“设置”，填写：
+启动日志会显示：
 
-- `API Base URL`
-  - 使用后端代理（推荐）：`/api` 或 `http://localhost:8787/api`
-  - 直连 Dify：`https://api.dify.ai/v1`（或自建 `https://你的域名/v1`）
-- `API Key`
-  - 使用后端代理时可留空（Key 由服务端 `DIFY_API_KEY` 提供）
-  - 直连 Dify 才需要填写（不推荐用于生产）
-- `User ID`：任意字符串，用于 Dify 侧区分用户
+- `http://0.0.0.0:<PORT>`
+- 局域网 IP
 
-## 注意
+### 通用（Linux / 容器）
 
-- 生产环境建议设置 `CORS_ORIGIN` 为你的站点域名，而不是 `*`
-- 不要把 `DIFY_API_KEY` 放到前端（浏览器可见）
-- Conversation data is stored in `server/data/conversations.json` (ignored by git).
+```bash
+cd /path/to/chatbot
+node server/server.js
+```
+
+访问：
+
+- 本机：`http://127.0.0.1:8787`
+- 反向代理后：`http(s)://你的域名`
+
+## 常用接口（后端）
+
+- `GET /api/health` 健康检查
+- `POST /api/alt-thread` 创建线程
+- `POST /api/alt-chat-stream` 流式聊天
+- `POST /api/feedback` 提交反馈
+- `GET /api/feedback?messageId=...` 查询反馈状态
+- `GET /api/conversations` / `POST /api/conversations/sync` 会话同步
+
+## 常见问题
+
+1. 页面报“请求失败，请检查代理服务是否启动”
+- 检查 `node server/server.js` 是否运行
+- 检查 `GET /api/health` 是否返回 `ok: true`
+
+2. 反向代理 502
+- 确认应用实际监听端口（`PORT`）
+- 在服务器本机先测：`curl http://127.0.0.1:<PORT>/api/health`
+
+3. 看不到历史会话
+- 检查 MySQL 连接配置是否正确
+- 检查数据库是否已执行 `server/sql/init.sql`
+
+## 安全建议
+
+- 不要把真实密钥写入前端代码
+- `CORS_ORIGIN` 生产环境不要使用 `*`
+- 对外部署建议走 HTTPS + 反向代理
