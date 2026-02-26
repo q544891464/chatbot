@@ -1,7 +1,39 @@
 ﻿import { getLoginUserInfo } from "./platform-bridge.js";
+import { renderMarkdownLite } from "./markdown.js";
+import {
+  clampMessages,
+  deriveTitleFromMessages,
+  formatConversationTime,
+  isProxyBaseUrl,
+  normalizeBaseUrl,
+  nowTime,
+  pickPlatformUserId,
+  randomId,
+  safeJsonParse,
+  scrollToBottom,
+  shouldAutoScroll,
+} from "./utils.js";
+import {
+  captureAuthCodeFromUrl,
+  loadAuthState,
+  startAuthFlow,
+  tryLoginWithStoredToken,
+  updateAuthDisplay,
+} from "./auth.js";
+import {
+  fetchFeedbackStatus,
+  initFeedbackState,
+  openFeedbackModal,
+  resetFeedbackHint,
+  sendFeedback,
+  submitFeedbackModal,
+  updateFeedbackReason,
+  updateFeedbackState,
+  closeFeedbackModal,
+} from "./feedback.js";
+import { agentChatStream, createAgentThread } from "./chat-api.js";
 const STORAGE_KEY = "h5ChatbotConfig:v1";
 const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
-const AUTH_STORAGE_KEY = "h5ChatbotAuth:v1";
 const AGENT_ID = "ChatbotAgent";
 const FEEDBACK_ENDPOINT_PATH = "/feedback";
 const DEFAULT_USER_META = {
@@ -58,61 +90,6 @@ const el = {
   imageViewerContent: document.getElementById("imageViewerContent"),
   imageViewerImg: document.getElementById("imageViewerImg"),
 };
-function nowTime() {
-  const d = new Date();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-function clampMessages(list) {
-  const MAX = 80;
-  return list.length > MAX ? list.slice(list.length - MAX) : list;
-}
-function safeJsonParse(raw, fallback) {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-function loadAuthState() {
-  return safeJsonParse(localStorage.getItem(AUTH_STORAGE_KEY) || "null", {
-    code: "",
-    state: "",
-    accessToken: "",
-    refreshToken: "",
-    tokenType: "",
-    expiresIn: 0,
-    receivedAt: 0,
-  });
-}
-function saveAuthState(payload) {
-  localStorage.setItem(
-    AUTH_STORAGE_KEY,
-    JSON.stringify({
-      code: String(payload?.code || ""),
-      state: String(payload?.state || ""),
-      accessToken: String(payload?.accessToken || ""),
-      refreshToken: String(payload?.refreshToken || ""),
-      tokenType: String(payload?.tokenType || ""),
-      expiresIn: Number(payload?.expiresIn || 0),
-      receivedAt: Number(payload?.receivedAt || 0),
-    }),
-  );
-}
-function normalizeBaseUrl(input) {
-  const raw = String(input || "").trim();
-  if (!raw) return "";
-  return raw.replace(/\/+$/, "");
-}
-function isProxyBaseUrl(baseUrl) {
-  const b = normalizeBaseUrl(baseUrl);
-  return b === "/api" || b.endsWith("/api");
-}
-function randomId(prefix = "u") {
-  const rnd = Math.random().toString(16).slice(2);
-  return `${prefix}-${Date.now().toString(16)}-${rnd}`;
-}
 function loadConfig() {
   const saved = safeJsonParse(
     localStorage.getItem(STORAGE_KEY) || "null",
@@ -138,30 +115,6 @@ function saveConfig(cfg) {
   );
 } // Choose a stable identifier for server-side conversation storage.
 
-function pickPlatformUserId(userInfo) {
-  if (!userInfo || typeof userInfo !== "object") return "";
-  const candidates = [
-    userInfo.phone,
-    userInfo.mobile,
-    userInfo.userId,
-    userInfo.useId,
-    userInfo.uid,
-    userInfo.id,
-  ];
-  for (const item of candidates) {
-    const value = String(item || "").trim();
-    if (value) return value;
-  }
-  return "";
-}
-function deriveTitleFromMessages(messages) {
-  const first = (messages || []).find((m) => m?.role === "user" && m?.content);
-  const text = String(first?.content || "")
-    .trim()
-    .replace(/\s+/g, " ");
-  if (!text) return "新对话";
-  return text.length > 18 ? `${text.slice(0, 18)}…` : text;
-}
 function normalizeConversation(item) {
   const now = Date.now();
   const messages = Array.isArray(item?.messages) ? item.messages : [];
@@ -290,7 +243,7 @@ const state = {
 };
 let composerObserver = null;
 let composerHeightRaf = 0;
-let feedbackResolve = null;
+const feedbackState = initFeedbackState();
 const IS_MOBILE = (() => {
   const ua = navigator.userAgent || "";
   const touch = navigator.maxTouchPoints || 0;
@@ -362,80 +315,6 @@ function isConfigured(cfg) {
 function setTips(text) {
   el.tips.textContent = text || "";
 }
-function getFeedbackUrl() {
-  return `${getStoreBase()}
-${FEEDBACK_ENDPOINT_PATH}`;
-}
-async function ensureFeedbackId(message) {
-  if (message?.externalMessageId) return message.externalMessageId;
-  const payload = {
-    activeId: state.activeId,
-    items: state.conversations.map(serializeConversation),
-  };
-  try {
-    await syncConversationsToServer(payload);
-  } catch {
-    // ignore
-  }
-  return message?.externalMessageId || "";
-}
-async function sendFeedback(message, rating, reason) {
-  const id = await ensureFeedbackId(message);
-  if (!id) {
-    throw new Error("未获取到外部消息ID");
-  }
-  const payload = { messageId: id, rating };
-  if (rating === "dislike") {
-    payload.reason = reason || "";
-  }
-  const url = getFeedbackUrl();
-  if (!url) {
-    throw new Error("未获取到外部消息ID");
-  }
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(txt || res.statusText || "反馈失败");
-  }
-}
-async function fetchFeedbackStatus(message) {
-  const id = await ensureFeedbackId(message);
-  if (!id) return null;
-  const url = `${getFeedbackUrl()}?messageId=${encodeURIComponent(id)}`;
-  const res = await fetch(url, { method: "GET" });
-  if (!res.ok) return null;
-  return res.json().catch(() => ({}));
-}
-function updateFeedbackState(meta, feedback, status) {
-  const likeBtn = meta.querySelector('[data-feedback="like"]');
-  const dislikeBtn = meta.querySelector('[data-feedback="dislike"]');
-  const disabled = status === "typing" || Boolean(feedback);
-  if (likeBtn) {
-    likeBtn.disabled = disabled;
-    likeBtn.classList.toggle("is-active", feedback === "like");
-  }
-  if (dislikeBtn) {
-    dislikeBtn.disabled = disabled;
-    dislikeBtn.classList.toggle("is-active", feedback === "dislike");
-  }
-}
-function updateFeedbackReason(contentWrap, reason) {
-  if (!contentWrap) return;
-  const elReason = contentWrap.querySelector(".msg__feedback-reason");
-  if (!elReason) return;
-  const text = String(reason || "").trim();
-  if (text) {
-    elReason.textContent = `原因：${text}`;
-    elReason.hidden = false;
-  } else {
-    elReason.textContent = "";
-    elReason.hidden = true;
-  }
-}
 function getPlatformLabel(platform) {
   return "ChatbotAgent";
 }
@@ -450,16 +329,6 @@ function setConnHint() {
   }
   el.connHint.textContent = "已连接：ChatbotAgent";
 }
-function shouldAutoScroll(container) {
-  const threshold = 120;
-  return (
-    container.scrollHeight - (container.scrollTop + container.clientHeight) <
-    threshold
-  );
-}
-function scrollToBottom(container) {
-  container.scrollTop = container.scrollHeight;
-}
 function getActiveConversation() {
   let conv = state.conversations.find((item) => item.id === state.activeId);
   if (!conv) {
@@ -472,17 +341,6 @@ function getActiveConversation() {
 }
 function sortConversations() {
   state.conversations.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
-}
-function formatConversationTime(ts) {
-  const d = new Date(ts || Date.now());
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  if (sameDay) return `${hh}:${mm}`;
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${month}/${day}`;
 }
 function updateConversationList() {
   if (!el.chatList) return;
@@ -517,40 +375,6 @@ function openChatList() {
 function closeChatList() {
   el.chatListModal.setAttribute("aria-hidden", "true");
 }
-function resetFeedbackHint(text, isError = false) {
-  if (!el.feedbackHint) return;
-  el.feedbackHint.textContent = text;
-  el.feedbackHint.classList.toggle("is-error", isError);
-}
-function openFeedbackModal() {
-  if (!el.feedbackModal || !el.feedbackInput) return Promise.resolve(null);
-  if (feedbackResolve) return Promise.resolve(null);
-  el.feedbackInput.value = "";
-  resetFeedbackHint("请简要说明原因，便于改进。", false);
-  el.feedbackModal.setAttribute("aria-hidden", "false");
-  setTimeout(() => el.feedbackInput.focus(), 0);
-  return new Promise((resolve) => {
-    feedbackResolve = resolve;
-  });
-}
-function closeFeedbackModal(result) {
-  if (!el.feedbackModal) return;
-  el.feedbackModal.setAttribute("aria-hidden", "true");
-  if (feedbackResolve) {
-    const resolve = feedbackResolve;
-    feedbackResolve = null;
-    resolve(result ?? null);
-  }
-}
-function submitFeedbackModal() {
-  if (!el.feedbackInput) return;
-  const reason = el.feedbackInput.value.trim();
-  if (!reason) {
-    resetFeedbackHint("请填写点踩原因。", true);
-    return;
-  }
-  closeFeedbackModal(reason);
-}
 function selectConversation(id) {
   if (id === state.activeId) return;
   state.activeId = id;
@@ -563,531 +387,6 @@ function selectConversation(id) {
   renderAll();
   setConnHint();
   updateConversationList();
-}
-function escapeHtml(text) {
-  return String(text || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-function isImageUrl(url) {
-  return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url || "");
-}
-function renderInlineMarkdown(escapedText) {
-  let out = String(escapedText || "");
-  const placeholders = [];
-  const token = (i) => `@@MD${i}@@`;
-  out = out.replace(/(^|\n)\s*([^\n*]{1,12})\*\*(?=\s*[:：])/g, "$1**$2**");
-  const pushPlaceholder = (html) => {
-    const i = placeholders.length;
-    placeholders.push(html);
-    return token(i);
-  };
-  const normalizeUrlToken = (raw) => {
-    let url = String(raw || "");
-    if (!url) return url;
-    url = url.replace(/^(&quot;|&#39;|&apos;|["'`<])+/gi, "");
-    url = url.replace(/([>"'`]|&quot;|&#39;|&apos;)+$/gi, "");
-    return url;
-  };
-  const renderUrlToken = (raw, altText) => {
-    const url = normalizeUrlToken(raw);
-    if (!url) return raw;
-    if (isImageUrl(url)) {
-      return pushPlaceholder(
-        `<img src="${url}" alt="${altText || "image"}" loading="lazy" decoding="async" />`,
-      );
-    }
-    return pushPlaceholder(
-      `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`,
-    );
-  };
-  out = out.replace(
-    /!\[([^\]]*)\]\s*\(\s*(https?:\/\/[^\s)]+)\s*\)/g,
-    (_, alt, url) => {
-      return renderUrlToken(url, alt);
-    },
-  );
-  out = out.replace(/`([^`\n]+)`/g, (_, code) => {
-    return pushPlaceholder(`<code class="md-inline">${code}</code>`);
-  });
-  out = out.replace(
-    /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    (_, label, url) => {
-      const cleanUrl = normalizeUrlToken(url);
-      if (!cleanUrl) return label;
-      return pushPlaceholder(
-        `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer">${label}</a>`,
-      );
-    },
-  );
-  out = out.replace(/(https?:\/\/[^\s<]+[^\s<\.)])/g, (url) => {
-    return renderUrlToken(url);
-  });
-  out = out.replace(/~~([^\n~]+)~~/g, "<del>$1</del>");
-  out = out.replace(/(\*\*|__)([^\n]+?)\1/g, "<strong>$2</strong>");
-  out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
-  out = out.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, "$1<em>$2</em>");
-  for (let i = 0; i < placeholders.length; i++) {
-    out = out.replaceAll(token(i), placeholders[i]);
-  }
-  return out;
-}
-function normalizeMarkdownText(text) {
-  let out = String(text || "");
-  const urls = [];
-  out = out.replace(/https?:\/\/[^\s<]+/g, (match) => {
-    const idx = urls.length;
-    urls.push(match);
-    return `@@URL${idx}@@`;
-  });
-  out = out.replace(/([^\n])\s*(#{1,6})\s*(?=\S)/g, "$1\n$2 ");
-  out = out.replace(/([:：。！？?.])\\s*([-*])\\s+(?=\\S)/g, "$1\\n$2 ");
-  out = out.replace(/([:：。！？?.])\\s*(\\d+\\.)\\s+(?=\\S)/g, "$1\\n$2 ");
-  out = out.replace(
-    /([\u4e00-\u9fff。！？；：，、）\)\]】])\s*-\s*(?=\S)/g,
-    "$1\n- ",
-  );
-  out = out.replace(
-    /([\u4e00-\u9fff。！？；：，、）\)\]】])\s*(\d+\.)\s*(?=(\*\*|[\u4e00-\u9fffA-Za-z]))/g,
-    "$1\n$2 ",
-  );
-  out = out.replace(/(\n\s*[-*])(?=\S)/g, "$1 ");
-  out = out.replace(/(\n\s*\d+\.)(?=\S)/g, "$1 ");
-  for (let i = 0; i < urls.length; i++) {
-    out = out.replaceAll(`@@URL${i}@@`, urls[i]);
-  }
-  return out;
-}
-function renderMarkdownLite(text) {
-  const src = String(text || "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
-  const unescaped = src
-    .replace(/\\r\\n/g, "\n")
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t");
-  const normalizedSrc = unescaped.replace(
-    /(^|\n)([^*\n]+?)\s*\*\*(?=\n|$)/g,
-    "$1**$2**",
-  );
-  const tokens = [];
-  const fenceRe = /```([\w-]+)?\n([\s\S]*?)```/g;
-  let lastIndex = 0;
-  let m;
-  while ((m = fenceRe.exec(normalizedSrc))) {
-    const before = normalizedSrc.slice(lastIndex, m.index);
-    if (before) tokens.push({ type: "text", value: before });
-    tokens.push({ type: "code", lang: m[1] || "", value: m[2] || "" });
-    lastIndex = m.index + m[0].length;
-  }
-  const tail = normalizedSrc.slice(lastIndex);
-  if (tail) tokens.push({ type: "text", value: tail });
-  let html = "";
-  const isListBlock = (block, ordered) => {
-    const lines = String(block || "").split("\n");
-    let hasItem = false;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      const isItem = ordered
-        ? /^\s*\d+\.\s+/.test(line)
-        : /^\s*[-*]\s+/.test(line);
-      if (isItem) {
-        hasItem = true;
-        continue;
-      }
-      if (/^\s{2,}\S/.test(line)) continue;
-      return false;
-    }
-    return hasItem;
-  };
-  const isContinuationBlock = (block) => {
-    const lines = String(block || "").split("\n");
-    let hasIndented = false;
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      if (/^\s{2,}\S/.test(line)) {
-        hasIndented = true;
-        continue;
-      }
-      return false;
-    }
-    return hasIndented;
-  };
-  const isSeparatorToken = (value) =>
-    /^:?-{3,}:?$/.test(String(value || "").trim());
-  const isTableSeparatorLine = (line) => {
-    let row = String(line || "").trim();
-    if (!row) return false;
-    if (row.startsWith("|")) row = row.slice(1);
-    if (row.endsWith("|")) row = row.slice(0, -1);
-    const cells = row.split("|").map((cell) => cell.trim());
-    if (!cells.length) return false;
-    return cells.every((cell) => isSeparatorToken(cell));
-  };
-  const parseTableRow = (line) => {
-    let row = String(line || "").trim();
-    if (row.startsWith("|")) row = row.slice(1);
-    if (row.endsWith("|")) row = row.slice(0, -1);
-    return row.split("|").map((cell) => cell.trim());
-  };
-  const isTableBlock = (block) => {
-    const lines = String(block || "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-    if (lines.length < 2) return false;
-    if (!lines[0].includes("|")) return false;
-    return isTableSeparatorLine(lines[1]);
-  };
-  const splitTablesFromBlock = (block) => {
-    const lines = String(block || "").split("\n");
-    const segments = [];
-    let buffer = [];
-    const flushBuffer = () => {
-      if (buffer.length) {
-        segments.push(buffer.join("\n"));
-        buffer = [];
-      }
-    };
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      const trimmed = line.trim();
-      if (trimmed && line.includes("|")) {
-        let j = i + 1;
-        while (j < lines.length && !lines[j].trim()) j += 1;
-        if (j < lines.length && isTableSeparatorLine(lines[j])) {
-          flushBuffer();
-          const tableLines = [lines[i], lines[j]];
-          i = j + 1;
-          while (i < lines.length) {
-            const rowLine = lines[i];
-            const rowTrim = rowLine.trim();
-            if (!rowTrim) {
-              i += 1;
-              break;
-            }
-            if (!rowLine.includes("|")) break;
-            tableLines.push(rowLine);
-            i += 1;
-          }
-          segments.push(tableLines.join("\n"));
-          continue;
-        }
-      }
-      buffer.push(line);
-      i += 1;
-    }
-    flushBuffer();
-    return segments;
-  };
-  const buildMarkdownTable = (header, rows) => {
-    const headerLine = `| ${header.join(" | ")} |`;
-    const sepLine = `| ${header.map(() => "---").join(" | ")} |`;
-    const rowLines = rows.map((row) => `| ${row.join(" | ")} |`);
-    return [headerLine, sepLine, ...rowLines].join("\n");
-  };
-  const parseInlineTableLine = (line) => {
-    if (!line.includes("|")) return null;
-    const cleaned = line
-      .replace(/```[a-z0-9-]*/gi, "")
-      .replace(/```/g, "")
-      .trim();
-    if (!cleaned.includes("|")) return null;
-    let tokens = cleaned.split("|").map((item) => item.trim());
-    if (tokens[0] === "") tokens = tokens.slice(1);
-    if (tokens[tokens.length - 1] === "") tokens = tokens.slice(0, -1);
-    if (tokens.length < 4) return null;
-    const lowerFirst = String(tokens[0] || "").toLowerCase();
-    if (lowerFirst === "markdown" || lowerFirst === "md") {
-      tokens = tokens.slice(1);
-    }
-    if (tokens.length < 4) return null;
-    const parseTokens = (parts, prefixCandidate) => {
-      let sepStart = -1;
-      for (let i = 0; i < parts.length; i++) {
-        if (isSeparatorToken(parts[i])) {
-          sepStart = i;
-          break;
-        }
-      }
-      if (sepStart <= 0) return null;
-      let sepEnd = sepStart;
-      while (sepEnd < parts.length && isSeparatorToken(parts[sepEnd])) {
-        sepEnd += 1;
-      }
-      const header = parts.slice(0, sepStart);
-      const columnCount = sepEnd - sepStart;
-      if (!columnCount || header.length !== columnCount) return null;
-      let prefix = prefixCandidate ? String(prefixCandidate).trim() : "";
-      const firstHeader = header[0] || "";
-      const colonIndex = Math.max(
-        firstHeader.lastIndexOf("："),
-        firstHeader.lastIndexOf(":"),
-      );
-      if (colonIndex > -1 && colonIndex < firstHeader.length - 1) {
-        const headPrefix = firstHeader.slice(0, colonIndex + 1).trim();
-        header[0] = firstHeader.slice(colonIndex + 1).trim();
-        prefix = [prefix, headPrefix].filter(Boolean).join(" ");
-      }
-      let rest = parts.slice(sepEnd);
-      if (rest.length < columnCount) return null;
-      const rows = [];
-      while (rest.length >= columnCount) {
-        rows.push(rest.slice(0, columnCount));
-        rest = rest.slice(columnCount);
-      }
-      const suffix = rest.join(" ").trim();
-      return { prefix, table: buildMarkdownTable(header, rows), suffix };
-    };
-    const direct = parseTokens(tokens, "");
-    if (direct) return direct;
-    const prefixCandidate = tokens[0];
-    const colonHint =
-      prefixCandidate?.includes("：") ||
-      prefixCandidate?.includes(":") ||
-      /表格|资费|如下|如下表|如下图/.test(prefixCandidate || "");
-    if (!colonHint) return null;
-    return parseTokens(tokens.slice(1), prefixCandidate);
-  };
-  const expandInlineTables = (text) => {
-    const lines = String(text || "").split("\n");
-    const outLines = [];
-    for (const line of lines) {
-      const parsed = parseInlineTableLine(line);
-      if (!parsed) {
-        outLines.push(line);
-        continue;
-      }
-      if (parsed.prefix) outLines.push(parsed.prefix);
-      outLines.push(parsed.table);
-      if (parsed.suffix) outLines.push(parsed.suffix);
-    }
-    return outLines.join("\n");
-  };
-  for (const t of tokens) {
-    if (t.type === "code") {
-      const codeEscaped = escapeHtml(t.value);
-      html += `<pre class="md-code"><code>${codeEscaped}</code></pre>`;
-      continue;
-    }
-    const normalized = expandInlineTables(normalizeMarkdownText(t.value));
-    const rawBlocks = String(normalized).split(/\n{2,}/);
-    const blocks = [];
-    for (const block of rawBlocks) {
-      if (!block.trim()) continue;
-      const lastIdx = blocks.length - 1;
-      if (lastIdx >= 0) {
-        const last = blocks[lastIdx];
-        if (isListBlock(last, true) && isListBlock(block, true)) {
-          blocks[lastIdx] = `${last}\n${block}`;
-          continue;
-        }
-        if (isListBlock(last, false) && isListBlock(block, false)) {
-          blocks[lastIdx] = `${last}\n${block}`;
-          continue;
-        }
-        if (isListBlock(last, true) && isContinuationBlock(block)) {
-          blocks[lastIdx] = `${last}\n${block}`;
-          continue;
-        }
-        if (isListBlock(last, false) && isContinuationBlock(block)) {
-          blocks[lastIdx] = `${last}\n${block}`;
-          continue;
-        }
-      }
-      blocks.push(block);
-    }
-    const expandedBlocks = [];
-    for (const block of blocks) {
-      const segments = splitTablesFromBlock(block);
-      for (const seg of segments) {
-        if (seg.trim()) expandedBlocks.push(seg);
-      }
-    }
-    for (const block of expandedBlocks) {
-      const trimmed = block.trimEnd();
-      if (!trimmed.trim()) continue;
-      const lines = trimmed.split("\n");
-      const hasHeading = lines.some((l) => /^ {0,3}(#{1,6})\s+/.test(l.trim()));
-      const hasRule = lines.some((l) =>
-        /^ {0,3}(-{3,}|\*{3,}|_{3,})$/.test(l.trim()),
-      );
-      const hasQuote = lines.some((l) => /^\s*>/.test(l));
-      const isUl = isListBlock(trimmed, false);
-      const isOl = isListBlock(trimmed, true);
-      if (isTableBlock(trimmed)) {
-        const tableLines = trimmed
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
-        const header = parseTableRow(tableLines[0]);
-        const rows = tableLines
-          .slice(2)
-          .map(parseTableRow)
-          .filter((row) => row.length);
-        const maxCols = Math.max(
-          header.length,
-          rows.reduce((max, row) => Math.max(max, row.length), 0),
-        );
-        const padRow = (row) => {
-          const next = row.slice(0, maxCols);
-          while (next.length < maxCols) next.push("");
-          return next;
-        };
-        const renderRow = (cells, cellTag) => {
-          const htmlCells = cells.map((cell) => {
-            const content = renderInlineMarkdown(escapeHtml(cell));
-            return `<${cellTag}>${content}</${cellTag}>`;
-          });
-          return `<tr>${htmlCells.join("")}</tr>`;
-        };
-        const headerRow = renderRow(padRow(header), "th");
-        const bodyRows = rows
-          .map((row) => renderRow(padRow(row), "td"))
-          .join("");
-        html += `<div class="md-table"><table><thead>${headerRow}</thead><tbody>${bodyRows}</tbody></table></div>`;
-      } else if (isUl) {
-        html += "<ul>";
-        let current = "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const mm = /^\s*[-*]\s+(.+)\s*$/.exec(line);
-          if (mm) {
-            if (current) {
-              const item = renderInlineMarkdown(escapeHtml(current)).replace(
-                /\n/g,
-                "<br />",
-              );
-              html += `<li>${item}</li>`;
-            }
-            current = mm[1];
-            continue;
-          }
-          if (/^\s{2,}\S/.test(line)) {
-            current += `\n${line.replace(/^\s{2,}/, "")}`;
-          }
-        }
-        if (current) {
-          const item = renderInlineMarkdown(escapeHtml(current)).replace(
-            /\n/g,
-            "<br />",
-          );
-          html += `<li>${item}</li>`;
-        }
-        html += "</ul>";
-      } else if (isOl) {
-        html += "<ol>";
-        let current = "";
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const mm = /^\s*\d+\.\s+(.+)\s*$/.exec(line);
-          if (mm) {
-            if (current) {
-              const item = renderInlineMarkdown(escapeHtml(current)).replace(
-                /\n/g,
-                "<br />",
-              );
-              html += `<li>${item}</li>`;
-            }
-            current = mm[1];
-            continue;
-          }
-          if (/^\s{2,}\S/.test(line)) {
-            current += `\n${line.replace(/^\s{2,}/, "")}`;
-          }
-        }
-        if (current) {
-          const item = renderInlineMarkdown(escapeHtml(current)).replace(
-            /\n/g,
-            "<br />",
-          );
-          html += `<li>${item}</li>`;
-        }
-        html += "</ol>";
-      } else if (lines.every((l) => /^\s*>/.test(l) || !l.trim())) {
-        const quoted = lines
-          .map((line) => line.replace(/^\s*> ?/, ""))
-          .join("\n")
-          .trimEnd();
-        const escaped = renderInlineMarkdown(escapeHtml(quoted)).replace(
-          /\n/g,
-          "<br />",
-        );
-        html += `<blockquote><p>${escaped}</p></blockquote>`;
-      } else if (hasHeading || hasRule || hasQuote) {
-        let paragraph = [];
-        let quoteBuffer = [];
-        const flushParagraph = () => {
-          if (!paragraph.length) return;
-          const text = paragraph.join("\n").trimEnd();
-          const escaped = renderInlineMarkdown(escapeHtml(text)).replace(
-            /\n/g,
-            "<br />",
-          );
-          html += `<p>${escaped}</p>`;
-          paragraph = [];
-        };
-        const flushQuote = () => {
-          if (!quoteBuffer.length) return;
-          const text = quoteBuffer.join("\n").trimEnd();
-          const escaped = renderInlineMarkdown(escapeHtml(text)).replace(
-            /\n/g,
-            "<br />",
-          );
-          html += `<blockquote><p>${escaped}</p></blockquote>`;
-          quoteBuffer = [];
-        };
-        for (const line of lines) {
-          const raw = line || "";
-          const trimmedLine = raw.trim();
-          if (!trimmedLine) {
-            flushQuote();
-            flushParagraph();
-            continue;
-          }
-          const headingMatch = /^ {0,3}(#{1,6})\s+(.+)$/.exec(trimmedLine);
-          if (headingMatch) {
-            flushQuote();
-            flushParagraph();
-            const level = headingMatch[1].length;
-            const text = headingMatch[2].trim();
-            const escaped = renderInlineMarkdown(escapeHtml(text));
-            html += `<h${level}>${escaped}</h${level}>`;
-            continue;
-          }
-          if (/^ {0,3}(-{3,}|\*{3,}|_{3,})$/.test(trimmedLine)) {
-            flushQuote();
-            flushParagraph();
-            html += "<hr />";
-            continue;
-          }
-          if (/^\s*>/.test(raw)) {
-            flushParagraph();
-            quoteBuffer.push(raw.replace(/^\s*> ?/, ""));
-            continue;
-          }
-          flushQuote();
-          paragraph.push(raw);
-        }
-        flushQuote();
-        flushParagraph();
-      } else {
-        const escaped = renderInlineMarkdown(escapeHtml(trimmed)).replace(
-          /\n/g,
-          "<br />",
-        );
-        html += `<p>${escaped}</p>`;
-      }
-    }
-  }
-  return (
-    html ||
-    `<p>${renderInlineMarkdown(escapeHtml(src)).replace(/\n/g, "<br />")}</p>`
-  );
 }
 async function copyToClipboard(text) {
   const value = String(text || "");
@@ -1255,7 +554,7 @@ function createMessageNode(message) {
     likeBtn.addEventListener("click", async () => {
       if (message.feedback) return;
       try {
-        await sendFeedback(message, "like");
+        await sendFeedback(getFeedbackCtx(), message, "like");
         message.feedback = "like";
         message.feedbackReason = "";
         updateFeedbackState(meta, message.feedback, message.status);
@@ -1275,7 +574,7 @@ function createMessageNode(message) {
     dislikeBtn.setAttribute("data-feedback", "dislike");
     dislikeBtn.addEventListener("click", async () => {
       if (message.feedback) return;
-      const reason = await openFeedbackModal();
+      const reason = await openFeedbackModal(el, feedbackState);
       if (reason === null) return;
       const trimmed = String(reason).trim();
       if (!trimmed) {
@@ -1284,7 +583,7 @@ function createMessageNode(message) {
         return;
       }
       try {
-        await sendFeedback(message, "dislike", trimmed);
+        await sendFeedback(getFeedbackCtx(), message, "dislike", trimmed);
         message.feedback = "dislike";
         message.feedbackReason = trimmed;
         updateFeedbackState(meta, message.feedback, message.status);
@@ -1322,7 +621,7 @@ function createMessageNode(message) {
   }
   if (role === "assistant" && !message.feedbackLoaded) {
     message.feedbackLoaded = true;
-    fetchFeedbackStatus(message)
+    fetchFeedbackStatus(getFeedbackCtx(), message)
       .then((data) => {
         if (!data || !data.has_feedback || !data.feedback) return;
         message.feedback = String(data.feedback.rating || "").trim();
@@ -1358,7 +657,7 @@ function openSettings() {
   if (el.platform) el.platform.value = "agent";
   updatePlatformUI();
   updateUserInfoDisplay();
-  updateAuthDisplay();
+  updateAuthDisplay(getAuthCtx());
   el.modal.setAttribute("aria-hidden", "false");
   setTimeout(() => el.userId?.focus(), 0);
 }
@@ -1450,83 +749,6 @@ function updateUserInfoDisplay() {
   if (el.userInfoOrg) el.userInfoOrg.textContent = orgText;
   if (el.userInfoPhone) el.userInfoPhone.textContent = phoneText;
 }
-function updateAuthDisplay() {
-  if (
-    !el.authCodeValue &&
-    !el.authStateValue &&
-    !el.authAccessTokenValue &&
-    !el.authRefreshTokenValue
-  ) {
-    return;
-  }
-  const auth = state.auth || {
-    code: "",
-    state: "",
-    accessToken: "",
-    refreshToken: "",
-    tokenType: "",
-    expiresIn: 0,
-    receivedAt: 0,
-  };
-  const codeText = auth.code ? auth.code : "-";
-  const stateText = auth.state ? auth.state : "-";
-  const accessText = auth.accessToken ? auth.accessToken : "-";
-  const refreshText = auth.refreshToken ? auth.refreshToken : "-";
-  if (el.authCodeValue) el.authCodeValue.textContent = codeText;
-  if (el.authStateValue) el.authStateValue.textContent = stateText;
-  if (el.authAccessTokenValue) el.authAccessTokenValue.textContent = accessText;
-  if (el.authRefreshTokenValue)
-    el.authRefreshTokenValue.textContent = refreshText;
-}
-async function fetchAuthConfig() {
-  const url = `${getStoreBase()}/auth-config`;
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(txt || res.statusText || "auth config failed");
-  }
-  return res.json().catch(() => ({}));
-}
-async function exchangeAuthToken(code, redirectUri) {
-  const url = `${getStoreBase()}/auth-token`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, redirectUri }),
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(txt || res.statusText || "token request failed");
-  }
-  return res.json().catch(() => ({}));
-}
-async function fetchAuthUserInfo(accessToken) {
-  const url = `${getStoreBase()}/auth-userinfo`;
-  const res = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
-  const text = await res.text().catch(() => "");
-  let data = null;
-  try {
-    data = JSON.parse(text || "{}");
-  } catch {
-    data = null;
-  }
-  if (!res.ok) {
-    return {
-      ok: false,
-      status: res.status,
-      errorCode: data?.errorCode ?? null,
-      message:
-        data?.error || text || res.statusText || "userinfo request failed",
-      data,
-    };
-  }
-  return { ok: true, status: res.status, data };
-}
 function applyUserInfoFromResponse(userInfo) {
   const name = String(userInfo?.name || "").trim();
   const phone = String(userInfo?.phone_number || "").trim();
@@ -1539,265 +761,30 @@ function applyUserInfoFromResponse(userInfo) {
     updateConversationList();
   }
 }
-async function tryLoginWithStoredToken() {
-  const accessToken = String(state.auth?.accessToken || "");
-  if (!accessToken) {
-    return { ok: false, needsAuth: false, reason: "missing_token" };
-  }
-  const result = await fetchAuthUserInfo(accessToken);
-  if (result.ok) {
-    applyUserInfoFromResponse(result.data || {});
-    return { ok: true, needsAuth: false };
-  }
-  if (result.status !== 200 && result.errorCode === 10011) {
-    return { ok: false, needsAuth: true, reason: "token_expired" };
-  }
-  setTips(`获取用户信息失败：${String(result.message || "")}`);
-  return { ok: false, needsAuth: false, reason: "other_error" };
-}
-async function startAuthFlow() {
-  try {
-    const cfg = await fetchAuthConfig();
-    const authorizeUrlBase = String(cfg?.authorizeUrlBase || "").trim();
-    const clientId = String(cfg?.clientId || "").trim();
-    const redirectUri = String(cfg?.redirectUri || "").trim();
-    const scope = String(cfg?.scope || "").trim();
-    if (!authorizeUrlBase || !clientId || !redirectUri || !scope) {
-      setTips("认证配置不完整，请检查环境变量。");
-      return;
-    }
-    const stateValue = `state-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
-    state.auth = {
-      code: "",
-      state: stateValue,
-      accessToken: "",
-      refreshToken: "",
-      tokenType: "",
-      expiresIn: 0,
-      receivedAt: 0,
-    };
-    saveAuthState(state.auth);
-    updateAuthDisplay();
-    const url = new URL(authorizeUrlBase);
-    url.searchParams.set("client_id", clientId);
-    url.searchParams.set("redirect_uri", redirectUri);
-    url.searchParams.set("response_type", "code");
-    url.searchParams.set("scope", scope);
-    url.searchParams.set("state", stateValue);
-    window.location.href = url.toString();
-  } catch (err) {
-    setTips(`认证失败：${String(err?.message || err)}`);
-  }
-}
-function captureAuthCodeFromUrl() {
-  const params = new URLSearchParams(window.location.search || "");
-  const code = params.get("code");
-  const returnedState = params.get("state");
-  if (!code) return false;
-  const expectedState = String(state.auth?.state || "");
-  if (expectedState && returnedState && expectedState !== returnedState) {
-    // eslint-disable-next-line no-console
-    console.warn("[Auth] state mismatch", { expectedState, returnedState });
-    state.auth = { ...state.auth, code: "", state: "", receivedAt: 0 };
-    saveAuthState(state.auth);
-    updateAuthDisplay();
-    return false;
-  }
-  state.auth = {
-    ...state.auth,
-    code,
-    state: returnedState || expectedState || "",
-    receivedAt: Date.now(),
-  };
-  const cleanUrl = `${window.location.pathname}
-${window.location.hash || ""}`;
-  window.history.replaceState({}, "", cleanUrl);
-  fetchAuthConfig()
-    .then((cfg) => String(cfg?.redirectUri || "").trim())
-    .then((redirectUri) => exchangeAuthToken(code, redirectUri))
-    .then((data) => {
-      const accessToken = String(data?.access_token || "");
-      const refreshToken = String(data?.refresh_token || "");
-      state.auth = {
-        ...state.auth,
-        accessToken,
-        refreshToken,
-        tokenType: String(data?.token_type || ""),
-        expiresIn: Number(data?.expires_in || 0),
-        receivedAt: Date.now(),
-      };
-      saveAuthState(state.auth);
-      updateAuthDisplay();
-      if (!accessToken) {
-        throw new Error("empty access_token");
-      }
-      return fetchAuthUserInfo(accessToken).then((result) => {
-        if (!result.ok) {
-          throw new Error(`userinfo:${String(result.message || "failed")}`);
-        }
-        return result.data || {};
-      });
-    })
-    .then((userInfo) => {
-      applyUserInfoFromResponse(userInfo);
-    })
-    .catch((err) => {
-      const message = String(err?.message || err);
-      if (message.startsWith("userinfo:")) {
-        setTips(`获取用户信息失败：${message.slice("userinfo:".length)}`);
-      } else {
-        setTips(`换取 token 失败：${message}`);
-      }
-      updateAuthDisplay();
-    });
-  saveAuthState(state.auth);
-  updateAuthDisplay();
-  return true;
-}
-async function createAgentThread(title) {
-  const url = `${getStoreBase()}/alt-thread`;
-  const payload = {
-    title: String(title || "新对话"),
-    agent_id: AGENT_ID,
-    metadata: getUserMeta(),
-  };
-  console.log("[Chatbot] create thread payload:", payload);
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `创建对话失败（${res.status}）：${txt || res.statusText || "Unknown error"}`,
-    );
-  }
-  const data = await res.json().catch(() => ({}));
-  const threadId = String(data?.id || "");
-  if (!threadId) {
-    throw new Error("创建对话失败：未返回对话 ID");
-  }
-  return threadId;
-}
-async function agentChat({ query, signal, threadId }) {
-  const url = `${getStoreBase()}/alt-chat`;
-  const config = { thread_id: threadId || null };
-  const payload = { query, config };
-  console.log("[Chatbot] chat payload:", payload);
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal,
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `请求失败（${res.status}）：${txt || res.statusText || "Unknown error"}`,
-    );
-  }
-  const data = await res.json().catch(() => ({}));
+function getAuthCtx() {
   return {
-    answer: String(data?.answer || data?.message || data?.content || ""),
-    externalMessageId: String(data?.externalMessageId || ""),
+    state,
+    el,
+    getStoreBase,
+    setTips,
+    onUserInfo: applyUserInfoFromResponse,
   };
 }
-async function agentChatStream({ query, signal, onDelta, onMeta, threadId }) {
-  const url = `${getStoreBase()}/alt-chat-stream`;
-  const config = { thread_id: threadId || null };
-  const payload = { query, config };
-  console.log("[Chatbot] chat stream payload:", payload);
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    signal,
-  });
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(
-      `请求失败（${res.status}）：${txt || res.statusText || "Unknown error"}`,
-    );
-  }
-  let sawChunk = false;
-  const handlePayload = (data) => {
-    if (!data || typeof data !== "object") return;
-    if (data.event === "meta") {
-      const messageId = data.messageId ?? data.externalMessageId;
-      if (messageId !== undefined && messageId !== null) {
-        onMeta?.(String(messageId));
-      }
-      return;
-    }
-    const messageId = data.messageId ?? data.externalMessageId;
-    if (messageId !== undefined && messageId !== null) {
-      onMeta?.(String(messageId));
-    }
-    const event = String(data.event || "");
-    const chunk = String(data.answer || data.content || data.message || "");
-    if (!chunk) return;
-    if (event && event !== "message") return;
-    sawChunk = true;
-    onDelta?.(chunk);
+function getFeedbackCtx() {
+  return {
+    state,
+    serializeConversation,
+    syncConversationsToServer,
+    getStoreBase,
+    feedbackEndpointPath: FEEDBACK_ENDPOINT_PATH,
   };
-  const handleFrame = (frame) => {
-    const lines = frame.split("\n").filter(Boolean);
-    const dataLines = [];
-    for (const line of lines) {
-      if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-    }
-    const dataRaw = dataLines.length ? dataLines.join("\n").trim() : frame.trim();
-    if (!dataRaw || dataRaw === "[DONE]") return;
-    const data = safeJsonParse(dataRaw, null);
-    if (data) {
-      handlePayload(data);
-      return;
-    }
-    const stripped = dataRaw
-      .replace(/^event:.*$/gim, "")
-      .replace(/^data:\s*/gim, "")
-      .trim();
-    if (!stripped || stripped === "[DONE]") return;
-    sawChunk = true;
-    onDelta?.(stripped);
+}
+function getChatApiCtx() {
+  return {
+    getStoreBase,
+    getUserMeta,
+    AGENT_ID,
   };
-  const handleTextResponse = (text) => {
-    const normalized = String(text || "")
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n");
-    if (!normalized.trim()) return;
-    const frames = normalized.split("\n\n");
-    for (const frame of frames) {
-      if (frame.trim()) handleFrame(frame);
-    }
-    if (!sawChunk && normalized.trim()) {
-      onDelta?.(normalized.trim());
-    }
-  };
-  const reader = res.body?.getReader();
-  if (!reader) {
-    const text = await res.text().catch(() => "");
-    handleTextResponse(text);
-    return;
-  }
-  const decoder = new TextDecoder("utf-8");
-  let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) >= 0) {
-      const frame = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      if (frame.trim()) handleFrame(frame);
-    }
-  }
-  if (buffer.trim()) {
-    handleFrame(buffer);
-  }
 }
 function setBusy(busy) {
   el.sendBtn.disabled = busy;
@@ -1838,7 +825,7 @@ async function sendMessage() {
   }
   if (!conv.conversationId) {
     try {
-      conv.conversationId = await createAgentThread(conv.title);
+      conv.conversationId = await createAgentThread(getChatApiCtx(), conv.title);
       conv.updatedAt = Date.now();
       saveConversations();
       updateConversationList();
@@ -1873,7 +860,7 @@ async function sendMessage() {
     if (!conv.conversationId) {
       throw new Error("无法创建对话 ID");
     }
-    await agentChatStream({
+    await agentChatStream(getChatApiCtx(), {
       query: text,
       signal: controller.signal,
       threadId: conv.conversationId,
@@ -2048,22 +1035,30 @@ el.input.addEventListener("keydown", (e) => {
   }
 });
 el.settingsBtn.addEventListener("click", openSettings);
-el.authStartBtn?.addEventListener("click", startAuthFlow);
+el.authStartBtn?.addEventListener("click", () => startAuthFlow(getAuthCtx()));
 el.closeSettingsBtn.addEventListener("click", closeSettings);
 el.backdrop.addEventListener("click", closeSettings);
-el.feedbackBackdrop?.addEventListener("click", () => closeFeedbackModal(null));
-el.feedbackCloseBtn?.addEventListener("click", () => closeFeedbackModal(null));
-el.feedbackCancelBtn?.addEventListener("click", () => closeFeedbackModal(null));
-el.feedbackSubmitBtn?.addEventListener("click", submitFeedbackModal);
+el.feedbackBackdrop?.addEventListener("click", () =>
+  closeFeedbackModal(el, feedbackState, null),
+);
+el.feedbackCloseBtn?.addEventListener("click", () =>
+  closeFeedbackModal(el, feedbackState, null),
+);
+el.feedbackCancelBtn?.addEventListener("click", () =>
+  closeFeedbackModal(el, feedbackState, null),
+);
+el.feedbackSubmitBtn?.addEventListener("click", () =>
+  submitFeedbackModal(el, feedbackState),
+);
 el.feedbackInput?.addEventListener("input", () => {
-  resetFeedbackHint("请简要说明原因，便于改进。", false);
+  resetFeedbackHint(el, "请简要说明原因，便于改进。", false);
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     closeSettings();
     closeChatList();
     closeImageViewer();
-    closeFeedbackModal(null);
+    closeFeedbackModal(el, feedbackState, null);
   }
 });
 document.addEventListener("visibilitychange", () => {
@@ -2141,7 +1136,7 @@ if (IS_MOBILE) {
 }
 async function bootstrap() {
   await initPlatformUser();
-  const hasAuthCode = captureAuthCodeFromUrl();
+  const hasAuthCode = captureAuthCodeFromUrl(getAuthCtx());
   await loadQuestionBank();
   setConnHint();
   renderAll();
@@ -2149,12 +1144,12 @@ async function bootstrap() {
   updateScrollButton();
   updateConversationList();
   updateUserInfoDisplay();
-  updateAuthDisplay();
+  updateAuthDisplay(getAuthCtx());
   if (!hasAuthCode) {
-    const result = await tryLoginWithStoredToken();
+    const result = await tryLoginWithStoredToken(getAuthCtx());
     if (result.needsAuth) {
       setTips("认证失效，正在重新认证...");
-      startAuthFlow();
+      startAuthFlow(getAuthCtx());
       return;
     }
   }
