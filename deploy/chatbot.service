@@ -1,0 +1,19 @@
+[Unit]
+Description=Chatbot H5 Proxy Service
+After=network.target mysql.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=chatbot
+Group=chatbot
+WorkingDirectory=/home/chatbot/chatbot
+ExecStart=/home/chatbot/chatbot/server/start.sh
+Restart=always
+RestartSec=3
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

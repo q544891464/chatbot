@@ -1,6 +1,6 @@
 # AI 产品助手（H5 Chatbot）
 
-这是一个面向移动端优先场景的 H5 聊天助手项目，当前主链路为：
+这是一个面向移动端优先场景的 H5 聊天助手项目。当前主链路为：
 
 - 前端：`h5-chatbot`
 - 代理服务：`server`
@@ -53,7 +53,7 @@
 
 ```text
 .
-├─ h5-chatbot/                  # H5 前端
+├─ h5-chatbot/
 │  ├─ index.html
 │  ├─ styles.css
 │  ├─ app.js
@@ -66,17 +66,21 @@
 │  ├─ question-bank.json
 │  ├─ static/
 │  └─ vendor/
-├─ server/                      # Node 代理与存储服务
+├─ server/
 │  ├─ server.js
-│  ├─ start.ps1                 # Windows 启动脚本
-│  ├─ start.sh                  # Linux 启动脚本
+│  ├─ start.ps1
+│  ├─ start.sh
 │  ├─ .env.example
 │  ├─ sql/init.sql
 │  ├─ data/
-│  └─ logs/                     # 运行日志
+│  └─ logs/
+│     ├─ server-YYYY-MM-DD.log
+│     └─ alt-stream-YYYY-MM-DD.log
 ├─ scripts/
-│  ├─ sync-from-github.sh       # Linux 代码同步脚本
+│  ├─ sync-from-github.sh
 │  └─ sync-from-github.env.example
+├─ deploy/
+│  └─ chatbot.service
 ├─ docs/
 └─ package.json
 ```
@@ -127,11 +131,6 @@ cp server/.env.example server/.env
 | `ALT_AUTH_SCOPE` | 否 | 空 | 上游认证 scope |
 | `ALT_AUTH_CLIENT_ID` | 否 | 空 | 上游认证 client_id |
 | `ALT_AUTH_CLIENT_SECRET` | 否 | 空 | 上游认证 client_secret |
-
-说明：
-
-- `ALT_API_TOKEN` 和 `ALT_AUTH_URL` 至少要有一套可用。
-- 若配置 `ALT_AUTH_URL`，代理会先取 token 再访问聊天、线程、反馈接口。
 
 ### OAuth 配置
 
@@ -203,8 +202,6 @@ npm install
 cp server/.env.example server/.env
 ```
 
-然后按实际环境修改 `server/.env`。
-
 ### 3. 初始化 MySQL
 
 执行 `server/sql/init.sql`。
@@ -221,7 +218,7 @@ cd d:\Code\chatbot
 #### Linux
 
 ```bash
-cd /path/to/chatbot
+cd /home/chatbot/chatbot
 chmod +x server/start.sh
 ./server/start.sh
 ```
@@ -232,12 +229,7 @@ chmod +x server/start.sh
 npm start
 ```
 
-但推荐优先使用 [start.sh](/d:/Code/chatbot/server/start.sh)，因为它会自动加载：
-
-- `server/.env`
-- 项目根目录 `.env`
-
-并打印监听地址。
+但推荐优先使用 [start.sh](/d:/Code/chatbot/server/start.sh)，因为它会自动加载 `server/.env` 和根目录 `.env`。
 
 ### 5. 验证启动
 
@@ -255,12 +247,10 @@ curl http://127.0.0.1:8787/api/health
 ### 推荐目录
 
 ```text
-/srv/chatbot
+/home/chatbot/chatbot
 ├─ 项目代码
 ├─ server/.env
 └─ server/logs/
-   ├─ server-YYYY-MM-DD.log
-   └─ alt-stream-YYYY-MM-DD.log
 ```
 
 ### 首次部署
@@ -268,8 +258,8 @@ curl http://127.0.0.1:8787/api/health
 1. 克隆仓库
 
 ```bash
-git clone <your-github-repo> /srv/chatbot
-cd /srv/chatbot
+git clone <your-github-repo> /home/chatbot/chatbot
+cd /home/chatbot/chatbot
 ```
 
 2. 安装依赖
@@ -318,17 +308,10 @@ Linux 启动脚本：
 
 - [start.sh](/d:/Code/chatbot/server/start.sh)
 
-特点：
-
-- 自动加载 `server/.env` 和根目录 `.env`
-- 自动补默认值 `PORT`、`CORS_ORIGIN`、`DIFY_BASE_URL`
-- 启动前打印监听地址与局域网 IP
-- 最终使用 `exec node server/server.js`
-
 典型用法：
 
 ```bash
-cd /srv/chatbot
+cd /home/chatbot/chatbot
 chmod +x server/start.sh
 ./server/start.sh
 ```
@@ -339,11 +322,126 @@ chmod +x server/start.sh
 nohup ./server/start.sh >> server/logs/server-console.log 2>&1 &
 ```
 
-如果你使用 `systemd`，建议把 `ExecStart` 直接写成：
+## systemd 配置
+
+仓库内已提供模板：
+
+- [chatbot.service](/d:/Code/chatbot/deploy/chatbot.service)
+
+### 1. 准备权限
+
+```bash
+chmod +x /home/chatbot/chatbot/server/start.sh
+sudo chown -R chatbot:chatbot /home/chatbot/chatbot
+```
+
+如果你不是用 `chatbot` 用户部署，请把 service 文件里的 `User` 和 `Group` 改成实际用户。
+
+### 2. 复制服务文件
+
+```bash
+sudo cp /home/chatbot/chatbot/deploy/chatbot.service /etc/systemd/system/chatbot.service
+```
+
+### 3. 按需编辑
+
+```bash
+sudo nano /etc/systemd/system/chatbot.service
+```
+
+模板内容如下：
 
 ```ini
-ExecStart=/srv/chatbot/server/start.sh
-WorkingDirectory=/srv/chatbot
+[Unit]
+Description=Chatbot H5 Proxy Service
+After=network.target mysql.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=chatbot
+Group=chatbot
+WorkingDirectory=/home/chatbot/chatbot
+ExecStart=/home/chatbot/chatbot/server/start.sh
+Restart=always
+RestartSec=3
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+```
+
+字段说明：
+
+- `User` / `Group`
+  - 服务运行用户和用户组
+- `WorkingDirectory`
+  - 项目根目录
+- `ExecStart`
+  - 实际启动命令，指向 [start.sh](/d:/Code/chatbot/server/start.sh)
+- `Restart=always`
+  - 进程异常退出后自动拉起
+- `RestartSec=3`
+  - 重启前等待 3 秒
+- `After=network.target mysql.service`
+  - 等网络和 MySQL 就绪后再启动
+
+如果你的 MySQL 服务名不是 `mysql.service`，可以改成：
+
+- `mysqld.service`
+- 或只保留 `After=network.target`
+
+### 4. 让 systemd 生效
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable chatbot
+sudo systemctl start chatbot
+```
+
+### 5. 查看状态
+
+```bash
+sudo systemctl status chatbot
+```
+
+### 常用命令
+
+```bash
+sudo systemctl start chatbot
+sudo systemctl stop chatbot
+sudo systemctl restart chatbot
+sudo systemctl status chatbot
+```
+
+### 查看日志
+
+```bash
+sudo journalctl -u chatbot -f
+sudo journalctl -u chatbot --since today
+```
+
+### 启动失败排查
+
+1. 查看状态
+
+```bash
+sudo systemctl status chatbot
+```
+
+2. 查看最近日志
+
+```bash
+sudo journalctl -u chatbot -n 100 --no-pager
+```
+
+3. 手动执行启动脚本
+
+```bash
+cd /home/chatbot/chatbot
+./server/start.sh
 ```
 
 ## 代码同步脚本
@@ -365,7 +463,7 @@ Linux 同步脚本：
 首次使用：
 
 ```bash
-cd /srv/chatbot
+cd /home/chatbot/chatbot
 cp scripts/sync-from-github.env.example scripts/sync-from-github.env
 chmod +x scripts/sync-from-github.sh
 set -a
@@ -377,7 +475,7 @@ set +a
 推荐配置：
 
 ```bash
-APP_DIR=/srv/chatbot
+APP_DIR=/home/chatbot/chatbot
 REMOTE_NAME=origin
 TARGET_BRANCH=main
 RUN_INSTALL=1
@@ -386,7 +484,7 @@ RESTART_CMD="systemctl restart chatbot"
 HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 ```
 
-如果你暂时不用 `systemd`，也可以先手动同步，再手动执行：
+如果暂时不用 `systemd`，同步后也可以手动执行：
 
 ```bash
 ./server/start.sh
@@ -395,8 +493,6 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 ## 使用说明
 
 ### 页面访问
-
-推荐直接访问：
 
 - `http://127.0.0.1:8787/`
 
