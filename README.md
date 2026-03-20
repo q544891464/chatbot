@@ -128,3 +128,45 @@ node server/server.js
 - 不要把真实密钥写入前端代码
 - `CORS_ORIGIN` 生产环境不要使用 `*`
 - 对外部署建议走 HTTPS + 反向代理
+
+## 服务器代码同步脚本
+
+仓库内提供 Linux 服务器可执行的一键同步脚本：
+
+- `scripts/sync-from-github.sh`
+- `scripts/sync-from-github.env.example`
+
+首次使用：
+
+```bash
+cd /path/to/chatbot
+cp scripts/sync-from-github.env.example scripts/sync-from-github.env
+chmod +x scripts/sync-from-github.sh
+set -a
+source scripts/sync-from-github.env
+set +a
+./scripts/sync-from-github.sh
+```
+
+脚本默认能力：
+
+- 自动处理 Git `safe.directory`
+- 拉取指定远程分支最新代码
+- 工作区有本地改动时直接中止，避免误覆盖
+- `package.json` 或 `package-lock.json` 变化时自动执行依赖安装
+- 可通过 `RESTART_CMD` 配置重启命令
+- 可通过 `HEALTHCHECK_URL` 配置健康检查
+
+常用方式：
+
+```bash
+./scripts/sync-from-github.sh
+./scripts/sync-from-github.sh main
+```
+
+如果你希望在同步后自动重启服务，建议在 `scripts/sync-from-github.env` 中配置：
+
+```bash
+RESTART_CMD="systemctl restart chatbot"
+HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
+```
