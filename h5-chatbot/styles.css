@@ -165,9 +165,6 @@ body::after{
   justify-self:end;
 }
 .topbar__actions #settingsBtn{
-  display:none;
-}
-body.dev-settings-visible .topbar__actions #settingsBtn{
   display:inline-flex;
 }
 
