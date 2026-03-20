@@ -1,4 +1,4 @@
-# AI 产品助手（H5 Chatbot）
+﻿# AI 产品助手（H5 Chatbot）
 
 这是一个面向移动端优先场景的 H5 聊天助手项目。当前主链路为：
 
@@ -229,7 +229,7 @@ chmod +x server/start.sh
 npm start
 ```
 
-但推荐优先使用 [start.sh](/d:/Code/chatbot/server/start.sh)，因为它会自动加载 `server/.env` 和根目录 `.env`。
+但推荐优先使用 [start.sh](/d:/Code/chatbot/server/start.sh) 或 [start.ps1](/d:/Code/chatbot/server/start.ps1)，因为它们会自动加载 `server/.env` 和根目录 `.env`。
 
 ### 5. 验证启动
 
@@ -293,14 +293,20 @@ chmod +x server/start.sh
 curl http://127.0.0.1:8787/api/health
 ```
 
+7. 打开前端页面验证
+
+```text
+http://<服务器IP>:8787/
+```
+
 ### 日常升级
 
 1. 备份 `server/.env`
-2. 执行同步脚本或手动 `git pull`
-3. 若依赖变化则重新安装
+2. 执行同步脚本或 `git pull`
+3. 如果 `package.json` / `package-lock.json` 变化，重新安装依赖
 4. 重启服务
-5. 检查 `/api/health`
-6. 验证页面、建线程、聊天、会话同步、反馈
+5. 访问 `/api/health`
+6. 发一条测试消息，检查聊天与反馈是否正常
 
 ## Linux 运行脚本
 
@@ -308,34 +314,50 @@ Linux 启动脚本：
 
 - [start.sh](/d:/Code/chatbot/server/start.sh)
 
-典型用法：
+脚本作用：
+
+- 自动加载 `server/.env`
+- 自动加载项目根目录 `.env`（如存在）
+- 自动补默认值 `PORT`、`CORS_ORIGIN`、`DIFY_BASE_URL`
+- 打印监听地址和局域网 IP
+- 最终通过 `node server/server.js` 启动
+
+前台运行：
 
 ```bash
 cd /home/chatbot/chatbot
-chmod +x server/start.sh
 ./server/start.sh
 ```
 
-后台运行示例：
+后台运行：
 
 ```bash
+cd /home/chatbot/chatbot
+nohup ./server/start.sh >> server/logs/server-console.log 2>&1 &
+```
+
+重启 `nohup` 方式启动的进程：
+
+```bash
+pkill -f "node server/server.js"
+cd /home/chatbot/chatbot
 nohup ./server/start.sh >> server/logs/server-console.log 2>&1 &
 ```
 
 ## systemd 配置
 
-仓库内已提供模板：
+仓库内已提供服务文件：
 
 - [chatbot.service](/d:/Code/chatbot/deploy/chatbot.service)
 
-### 1. 准备权限
+### 1. 确认启动脚本可执行
 
 ```bash
 chmod +x /home/chatbot/chatbot/server/start.sh
 sudo chown -R chatbot:chatbot /home/chatbot/chatbot
 ```
 
-如果你不是用 `chatbot` 用户部署，请把 service 文件里的 `User` 和 `Group` 改成实际用户。
+如果你的运行用户不是 `chatbot`，请把下面 service 文件中的 `User` 和 `Group` 改成实际用户。
 
 ### 2. 复制服务文件
 
@@ -343,24 +365,24 @@ sudo chown -R chatbot:chatbot /home/chatbot/chatbot
 sudo cp /home/chatbot/chatbot/deploy/chatbot.service /etc/systemd/system/chatbot.service
 ```
 
-### 3. 按需编辑
+也可以手动创建：
 
 ```bash
 sudo nano /etc/systemd/system/chatbot.service
 ```
 
-模板内容如下：
+内容如下：
 
 ```ini
 [Unit]
 Description=Chatbot H5 Proxy Service
-After=network.target mysql.service
+After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
-User=chatbot
-Group=chatbot
+User=root
+Group=root
 WorkingDirectory=/home/chatbot/chatbot
 ExecStart=/home/chatbot/chatbot/server/start.sh
 Restart=always
@@ -385,15 +407,12 @@ WantedBy=multi-user.target
   - 进程异常退出后自动拉起
 - `RestartSec=3`
   - 重启前等待 3 秒
-- `After=network.target mysql.service`
-  - 等网络和 MySQL 就绪后再启动
+- `After=network.target`
+  - 先等待网络就绪后再启动
 
-如果你的 MySQL 服务名不是 `mysql.service`，可以改成：
+如果你的 MySQL 是 Docker 容器部署，通常不要在这里依赖 `mysql.service`。保留 `After=network.target` 即可；真正关键的是 [server/.env](/d:/Code/chatbot/server/.env) 里的 `DB_HOST` / `DB_PORT` 要能从宿主机访问到容器 MySQL。
 
-- `mysqld.service`
-- 或只保留 `After=network.target`
-
-### 4. 让 systemd 生效
+### 3. 让 systemd 生效
 
 ```bash
 sudo systemctl daemon-reload
@@ -401,13 +420,13 @@ sudo systemctl enable chatbot
 sudo systemctl start chatbot
 ```
 
-### 5. 查看状态
+### 4. 查看状态
 
 ```bash
 sudo systemctl status chatbot
 ```
 
-### 常用命令
+### 5. 常用命令
 
 ```bash
 sudo systemctl start chatbot
@@ -416,14 +435,14 @@ sudo systemctl restart chatbot
 sudo systemctl status chatbot
 ```
 
-### 查看日志
+### 6. 查看日志
 
 ```bash
 sudo journalctl -u chatbot -f
 sudo journalctl -u chatbot --since today
 ```
 
-### 启动失败排查
+### 7. 启动失败排查
 
 1. 查看状态
 
@@ -536,6 +555,17 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 | `GET` | `/api/feedback?messageId=...` | 查询反馈状态 |
 | `POST` | `/api/chat-messages` | Dify 代理接口 |
 
+## 日志说明
+
+日志统一放在 `server/logs/`：
+
+- `server-YYYY-MM-DD.log`
+  - 服务启动、反馈错误、反馈 ID 映射日志
+- `alt-stream-YYYY-MM-DD.log`
+  - 上游流式事件、消息 ID 提取、流结束诊断日志
+- `server-console.log`
+  - `nohup` 方式启动时的标准输出与标准错误
+
 ## 常见问题与排障
 
 ### 1. 页面提示“请求失败，请检查代理服务是否已启动”
@@ -584,8 +614,8 @@ curl http://127.0.0.1:8787/api/health
 
 - `FEEDBACK_BASE_URL`
 - 上游认证是否正常
-- [server/logs](/d:/Code/chatbot/server/logs) 目录下当天的 `server-YYYY-MM-DD.log` 中的 `feedback:error`
-- [server/logs](/d:/Code/chatbot/server/logs) 目录下当天的 `alt-stream-YYYY-MM-DD.log` 中是否已拿到流式消息 ID
+- [server/logs](/d:/Code/chatbot/server/logs) 下当天的 `server-YYYY-MM-DD.log` 里的 `feedback:error`
+- [server/logs](/d:/Code/chatbot/server/logs) 下当天的 `alt-stream-YYYY-MM-DD.log` 是否拿到了流式消息 ID
 
 ### 6. 服务器同步脚本失败
 
