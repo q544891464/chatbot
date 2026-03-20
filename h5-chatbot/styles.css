@@ -111,7 +111,7 @@ body{
   justify-self:end;
 }
 .topbar__actions #settingsBtn{
-  display:inline-flex;
+  display:none;
 }
 
 .iconbtn{

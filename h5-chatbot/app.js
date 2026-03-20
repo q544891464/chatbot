@@ -4,6 +4,7 @@ import {
   clampMessages,
   deriveTitleFromMessages,
   formatConversationTime,
+  getDefaultProxyBaseUrl,
   isProxyBaseUrl,
   normalizeBaseUrl,
   nowTime,
@@ -95,7 +96,8 @@ function loadConfig() {
     localStorage.getItem(STORAGE_KEY) || "null",
     null,
   );
-  const baseUrl = normalizeBaseUrl(saved?.baseUrl || "/api");
+  const defaultBaseUrl = getDefaultProxyBaseUrl();
+  const baseUrl = normalizeBaseUrl(saved?.baseUrl || defaultBaseUrl);
   const apiKey = String(saved?.apiKey || "");
   const userId = String(saved?.userId || randomId("user"));
   const responseMode = "streaming";
@@ -146,7 +148,11 @@ function createConversation(seed) {
 }
 function getStoreBase() {
   const b = normalizeBaseUrl(state.config.baseUrl);
-  return isProxyBaseUrl(b) ? b : "/api";
+  if (b === "/api") {
+    return getDefaultProxyBaseUrl();
+  }
+  if (isProxyBaseUrl(b)) return b;
+  return getDefaultProxyBaseUrl();
 }
 async function fetchConversationsFromServer() {
   const url = `${getStoreBase()}/conversations?userId=${encodeURIComponent(state.config.userId)}`;
@@ -218,8 +224,9 @@ function saveConversations() {
     activeId: state.activeId,
     items: state.conversations.map(serializeConversation),
   };
-  syncConversationsToServer(payload).catch(() => {
-    setTips("会话同步失败，请检查服务是否启动。");
+  syncConversationsToServer(payload).catch((err) => {
+    const detail = String(err?.message || err || "").trim();
+    setTips(detail ? `会话同步失败：${detail}` : "会话同步失败，请检查服务是否启动。");
   });
 }
 const initialConfig = loadConfig();
@@ -682,7 +689,7 @@ function updatePlatformUI() {
   if (el.baseUrl) {
     const base = normalizeBaseUrl(el.baseUrl.value);
     if (!isProxyBaseUrl(base)) {
-      el.baseUrl.value = "/api";
+      el.baseUrl.value = getDefaultProxyBaseUrl();
     }
   }
 }
@@ -950,10 +957,12 @@ async function sendMessage() {
       conv.updatedAt = Date.now();
       saveConversations();
       updateConversationList();
+      const detail = String(err?.message || err || "").trim();
       setTips(
-        isProxyBaseUrl(state.config.baseUrl)
-          ? "请求失败：请检查代理服务是否已启动。"
-          : "请求失败：请检查 Base URL / CORS。",
+        detail ||
+          (isProxyBaseUrl(state.config.baseUrl)
+            ? "请求失败：请检查代理服务是否已启动。"
+            : "请求失败：请检查 Base URL / CORS。"),
       );
     }
   } finally {
@@ -1069,7 +1078,7 @@ document.addEventListener("visibilitychange", () => {
 el.settingsForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const cfg = {
-    baseUrl: el.baseUrl?.value || "/api",
+    baseUrl: el.baseUrl?.value || getDefaultProxyBaseUrl(),
     apiKey: el.apiKey?.value || "",
     userId: el.userId?.value || randomId("user"),
     responseMode: el.responseMode?.value || "streaming",
@@ -1077,7 +1086,7 @@ el.settingsForm.addEventListener("submit", (e) => {
   };
   const platform = "agent";
   const baseUrl = normalizeBaseUrl(cfg.baseUrl);
-  const finalBaseUrl = !isProxyBaseUrl(baseUrl) ? "/api" : baseUrl;
+  const finalBaseUrl = !isProxyBaseUrl(baseUrl) ? getDefaultProxyBaseUrl() : baseUrl;
   state.config = {
     baseUrl: finalBaseUrl,
     apiKey: String(cfg.apiKey || "").trim(),

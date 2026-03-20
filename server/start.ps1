@@ -45,12 +45,11 @@ function Get-LanIPv4 {
   }
 
   try {
-    $raw = ipconfig | Out-String
-    $regex = '\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b'
-    $ips = [regex]::Matches($raw, $regex) |
-      ForEach-Object { $_.Value } |
-      Where-Object { $_ -ne "127.0.0.1" -and $_ -notmatch "^169\\.254\\." } |
-      Select-Object -Unique
+    $ips = ipconfig | Select-String -Pattern 'IPv4[^:]*:\s*(\d{1,3}(?:\.\d{1,3}){3})' | ForEach-Object {
+      $_.Matches[0].Groups[1].Value
+    } | Where-Object {
+      $_ -and $_ -ne "127.0.0.1" -and $_ -notmatch "^169\\.254\\."
+    } | Select-Object -Unique
     return @($ips)
   } catch {
     return @()

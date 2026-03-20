@@ -51,6 +51,37 @@ const pool = mysql.createPool({
 
 const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
 
+async function ensureSchema() {
+  const conn = await pool.getConnection();
+  try {
+    const [rows] = await conn.execute(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME = 'messages'
+         AND COLUMN_NAME = 'external_message_id'`,
+      [DB_NAME],
+    );
+    const count = Number(rows?.[0]?.count || 0);
+    if (!count) {
+      await conn.execute(
+        "ALTER TABLE messages ADD COLUMN external_message_id VARCHAR(128) DEFAULT NULL AFTER content",
+      );
+    }
+  } finally {
+    conn.release();
+  }
+}
+
+async function safeFetch(url, options, label) {
+  try {
+    return await fetch(url, options);
+  } catch (err) {
+    const reason = String(err?.cause?.code || err?.code || err?.message || err || "");
+    throw new Error(`${label} unreachable: ${reason}`);
+  }
+}
+
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": CORS_ORIGIN,
@@ -217,14 +248,14 @@ async function requestAltToken() {
   params.set("client_id", ALT_AUTH_CLIENT_ID);
   params.set("client_secret", ALT_AUTH_CLIENT_SECRET);
 
-  const res = await fetch(ALT_AUTH_URL, {
+  const res = await safeFetch(ALT_AUTH_URL, {
     method: "POST",
     headers: {
       accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: params.toString(),
-  });
+  }, "ALT auth service");
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
@@ -843,7 +874,7 @@ async function handleAltChat(req, res) {
   const controller = new AbortController();
   req.on("close", () => controller.abort());
 
-  const upstreamRes = await fetch(ALT_API_URL, {
+  const upstreamRes = await safeFetch(ALT_API_URL, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -852,7 +883,7 @@ async function handleAltChat(req, res) {
     },
     body: JSON.stringify(payload),
     signal: controller.signal,
-  });
+  }, "ALT chat service");
 
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
@@ -943,7 +974,7 @@ async function handleAltChatStream(req, res) {
   const controller = new AbortController();
   req.on("close", () => controller.abort());
 
-  const upstreamRes = await fetch(ALT_API_URL, {
+  const upstreamRes = await safeFetch(ALT_API_URL, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -952,7 +983,7 @@ async function handleAltChatStream(req, res) {
     },
     body: JSON.stringify(payload),
     signal: controller.signal,
-  });
+  }, "ALT chat service");
 
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
@@ -1140,7 +1171,7 @@ async function handleAltThread(req, res) {
     metadata: typeof body?.metadata === "object" && body?.metadata ? body.metadata : {},
   };
 
-  const upstreamRes = await fetch(threadUrl, {
+  const upstreamRes = await safeFetch(threadUrl, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -1148,7 +1179,7 @@ async function handleAltThread(req, res) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
-  });
+  }, "ALT thread service");
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
@@ -1503,9 +1534,17 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  // eslint-disable-next-line no-console
-  console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);
-  // eslint-disable-next-line no-console
-  console.log(`Serving static from ${PUBLIC_DIR}`);
-});
+ensureSchema()
+  .then(() => {
+    server.listen(PORT, "0.0.0.0", () => {
+      // eslint-disable-next-line no-console
+      console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);
+      // eslint-disable-next-line no-console
+      console.log(`Serving static from ${PUBLIC_DIR}`);
+    });
+  })
+  .catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error("Failed to ensure database schema:", err);
+    process.exit(1);
+  });

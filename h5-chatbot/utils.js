@@ -29,6 +29,20 @@ export function isProxyBaseUrl(baseUrl) {
   return b === "/api" || b.endsWith("/api");
 }
 
+export function getDefaultProxyBaseUrl() {
+  if (typeof window === "undefined" || !window.location) {
+    return "/api";
+  }
+  const { protocol, port } = window.location;
+  if (protocol === "file:") {
+    return "http://127.0.0.1:8787/api";
+  }
+  if (port === "8787") {
+    return "/api";
+  }
+  return "http://127.0.0.1:8787/api";
+}
+
 export function randomId(prefix = "u") {
   const rnd = Math.random().toString(16).slice(2);
   return `${prefix}-${Date.now().toString(16)}-${rnd}`;
