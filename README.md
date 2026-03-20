@@ -259,6 +259,8 @@ curl http://127.0.0.1:8787/api/health
 ├─ 项目代码
 ├─ server/.env
 └─ server/logs/
+   ├─ server-YYYY-MM-DD.log
+   └─ alt-stream-YYYY-MM-DD.log
 ```
 
 ### 首次部署
@@ -486,8 +488,8 @@ curl http://127.0.0.1:8787/api/health
 
 - `FEEDBACK_BASE_URL`
 - 上游认证是否正常
-- [server.log](/d:/Code/chatbot/server/logs/server.log) 中的 `feedback:error`
-- [alt-stream.log](/d:/Code/chatbot/server/logs/alt-stream.log) 中是否已拿到流式消息 ID
+- [server/logs](/d:/Code/chatbot/server/logs) 目录下当天的 `server-YYYY-MM-DD.log` 中的 `feedback:error`
+- [server/logs](/d:/Code/chatbot/server/logs) 目录下当天的 `alt-stream-YYYY-MM-DD.log` 中是否已拿到流式消息 ID
 
 ### 6. 服务器同步脚本失败
 

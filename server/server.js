@@ -52,8 +52,8 @@ const pool = mysql.createPool({
 
 const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
 const LOG_DIR = path.resolve(__dirname, "logs");
-const ALT_STREAM_LOG_FILE = path.join(LOG_DIR, "alt-stream.log");
-const SERVER_LOG_FILE = path.join(LOG_DIR, "server.log");
+const ALT_STREAM_LOG_PREFIX = "alt-stream";
+const SERVER_LOG_PREFIX = "server";
 
 /**
  * 确保日志目录存在。
@@ -83,14 +83,28 @@ function appendLogLine(filePath, line) {
 }
 
 /**
+ * 返回按天切分的日志文件路径。
+ *
+ * @param {string} prefix 日志前缀。
+ * @param {Date} [date] 目标日期。
+ * @returns {string} 日志文件路径。
+ */
+function getDailyLogFilePath(prefix, date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return path.join(LOG_DIR, `${prefix}-${year}-${month}-${day}.log`);
+}
+
+/**
  * 以 JSON 行格式追加结构化日志。
  *
- * @param {string} filePath 日志文件路径。
+ * @param {string} prefix 日志前缀。
  * @param {object} payload 日志对象。
  * @returns {void}
  */
-function appendJsonLog(filePath, payload) {
-  appendLogLine(filePath, JSON.stringify(payload));
+function appendJsonLog(prefix, payload) {
+  appendLogLine(getDailyLogFilePath(prefix), JSON.stringify(payload));
 }
 
 /**
@@ -874,7 +888,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
   const row = rows?.[0];
   const threadId = String(row?.thread_id || "").trim();
   if (!threadId) {
-    appendJsonLog(SERVER_LOG_FILE, {
+    appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
       event: "feedback:map:miss-local-thread",
       externalMessageId: trimmedId,
@@ -884,7 +898,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
 
   const historyUrl = getAltHistoryUrl(ALT_AGENT_ID, threadId);
   if (!historyUrl) {
-    appendJsonLog(SERVER_LOG_FILE, {
+    appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
       event: "feedback:map:miss-history-url",
       externalMessageId: trimmedId,
@@ -908,7 +922,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
-    appendJsonLog(SERVER_LOG_FILE, {
+    appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
       event: "feedback:map:history-error",
       externalMessageId: trimmedId,
@@ -924,7 +938,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
   try {
     data = JSON.parse(text || "{}");
   } catch {
-    appendJsonLog(SERVER_LOG_FILE, {
+    appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
       event: "feedback:map:history-invalid-json",
       externalMessageId: trimmedId,
@@ -942,7 +956,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
   });
   const resolvedId = String(matched?.id || "").trim();
   if (resolvedId && isIntegerMessageId(resolvedId)) {
-    appendJsonLog(SERVER_LOG_FILE, {
+    appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
       event: "feedback:map:resolved",
       externalMessageId: trimmedId,
@@ -953,7 +967,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
     return resolvedId;
   }
 
-  appendJsonLog(SERVER_LOG_FILE, {
+  appendJsonLog(SERVER_LOG_PREFIX, {
     ts: new Date().toISOString(),
     event: "feedback:map:not-found",
     externalMessageId: trimmedId,
@@ -1122,7 +1136,7 @@ function logAltStreamDiag(requestId, stage, detail = {}) {
   };
   // eslint-disable-next-line no-console
   console.log(`[ALT STREAM][${requestId}] ${stage}`, detail);
-  appendJsonLog(ALT_STREAM_LOG_FILE, entry);
+  appendJsonLog(ALT_STREAM_LOG_PREFIX, entry);
 }
 
 /**
@@ -2058,7 +2072,7 @@ async function handleFeedback(req, res) {
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
-    appendJsonLog(SERVER_LOG_FILE, {
+    appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
       event: "feedback:error",
       feedbackUrl,
@@ -2294,7 +2308,7 @@ ensureSchema()
       console.log(`Serving static from ${PUBLIC_DIR}`);
       // eslint-disable-next-line no-console
       console.log("[Config] Active upstreams:", activeUpstreams);
-      appendJsonLog(SERVER_LOG_FILE, {
+      appendJsonLog(SERVER_LOG_PREFIX, {
         ts: new Date().toISOString(),
         event: "server:start",
         port: PORT,
