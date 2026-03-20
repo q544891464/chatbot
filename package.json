@@ -3,6 +3,7 @@
   "private": true,
   "type": "commonjs",
   "dependencies": {
+    "markdown-it": "^14.1.1",
     "mysql2": "^3.11.0"
   },
   "scripts": {

@@ -648,6 +648,16 @@ function renderFollowupSuggestions(items) {
   if (shouldAutoScroll(el.messages)) scrollToBottom(el.messages);
 }
 /**
+ * 在展示前清理助手回复中的前导空行，并修正常见的残缺加粗标记。
+ *
+ * @param {string} content 助手原始回复文本。
+ * @returns {string} 适合前端渲染的文本。
+ */
+function normalizeAssistantContentForDisplay(content) {
+  return String(content || "")
+    .replace(/^(?:\uFEFF)?(?:[ \t]*\r?\n)+/, "");
+}
+/**
  * 按角色与状态更新消息气泡内容。
  *
  * @param {HTMLElement} bubble 消息气泡节点。
@@ -664,7 +674,7 @@ function setBubbleContent(bubble, role, content, status) {
       bubble.innerHTML = isTyping ? thinkingHtml : "";
       return;
     }
-    const body = renderMarkdownLite(content || "");
+    const body = renderMarkdownLite(normalizeAssistantContentForDisplay(content));
     bubble.innerHTML = isTyping
       ? `${body}
 ${thinkingHtml}`
@@ -839,6 +849,14 @@ function openSettings() {
  */
 function closeSettings() {
   el.modal.setAttribute("aria-hidden", "true");
+}
+/**
+ * 切换开发者设置按钮的显示状态。
+ *
+ * @param {boolean} visible 是否显示设置按钮。
+ */
+function toggleDevSettingsButton(visible) {
+  document.body.classList.toggle("dev-settings-visible", Boolean(visible));
 }
 /**
  * 根据输入内容动态调整文本域高度。
@@ -1400,6 +1418,12 @@ if (IS_MOBILE) {
 } else {
   el.input.setAttribute("enterkeyhint", "send");
 }
+window.showDevSettings = () => {
+  toggleDevSettingsButton(true);
+};
+window.hideDevSettings = () => {
+  toggleDevSettingsButton(false);
+};
 /**
  * 页面启动入口，负责初始化用户、认证、会话和界面状态。
  *
