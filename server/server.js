@@ -9,7 +9,7 @@ const DIFY_BASE_URL = String(process.env.DIFY_BASE_URL || "https://api.dify.ai/v
 const DIFY_API_KEY = String(process.env.DIFY_API_KEY || "");
 const CORS_ORIGIN = String(process.env.CORS_ORIGIN || "*");
 const ALT_API_URL = String(
-  process.env.ALT_API_URL || "http://150.223.194.216:5050/api/chat/agent/ChatbotAgent",
+  process.env.ALT_API_URL || "http://183.78.180.103:5050/api/chat/agent/ChatbotAgent",
 );
 const ALT_API_TOKEN = String(process.env.ALT_API_TOKEN || "");
 const ALT_THREAD_URL = String(process.env.ALT_THREAD_URL || "");
@@ -21,7 +21,7 @@ const ALT_AUTH_SCOPE = String(process.env.ALT_AUTH_SCOPE || "");
 const ALT_AUTH_CLIENT_ID = String(process.env.ALT_AUTH_CLIENT_ID || "");
 const ALT_AUTH_CLIENT_SECRET = String(process.env.ALT_AUTH_CLIENT_SECRET || "");
 const FEEDBACK_BASE_URL = String(
-  process.env.FEEDBACK_BASE_URL || "http://150.223.194.216:5173",
+  process.env.FEEDBACK_BASE_URL || "http://183.78.180.103:5173",
 ).replace(/\/+$/, "");
 const DB_HOST = String(process.env.DB_HOST || "127.0.0.1");
 const DB_PORT = Number.parseInt(process.env.DB_PORT || "3306", 10);
@@ -280,6 +280,7 @@ function guessContentType(filePath) {
   if (ext === ".json") return "application/json; charset=utf-8";
   if (ext === ".svg") return "image/svg+xml";
   if (ext === ".png") return "image/png";
+  if (ext === ".mjs") return "text/javascript; charset=utf-8";
   if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
   if (ext === ".ico") return "image/x-icon";
   return "application/octet-stream";
@@ -1919,6 +1920,12 @@ ensureSchema()
       console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);
       // eslint-disable-next-line no-console
       console.log(`Serving static from ${PUBLIC_DIR}`);
+      // eslint-disable-next-line no-console
+      console.log("[Config] Active upstreams:", {
+        ALT_API_URL,
+        ALT_AUTH_URL,
+        ALT_THREAD_URL: getAltThreadUrl(),
+      });
     });
   })
   .catch((err) => {

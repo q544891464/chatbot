@@ -3,6 +3,40 @@ import {
   readResponseError,
   safeJsonParse,
 } from "./utils.js";
+import { createParser } from "./vendor/eventsource-parser.js";
+
+/**
+ * 为单次聊天流请求生成可追踪的日志 ID。
+ *
+ * @returns {string} 请求日志 ID。
+ */
+function createStreamRequestId() {
+  return `sse-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+/**
+ * 截断日志中的长文本，避免控制台输出过大。
+ *
+ * @param {string} text 原始文本。
+ * @param {number} maxLen 最大保留长度。
+ * @returns {string} 截断后的文本。
+ */
+function previewText(text, maxLen = 160) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  if (raw.length <= maxLen) return raw;
+  return `${raw.slice(0, maxLen)}...`;
+}
+
+/**
+ * 统一输出 SSE 调试日志，便于按 requestId 串联一次流请求。
+ *
+ * @param {string} requestId 请求日志 ID。
+ * @param {string} stage 当前阶段。
+ * @param {object} detail 结构化详情。
+ */
+function logSse(requestId, stage, detail = {}) {
+  console.log(`[Chatbot][SSE][${requestId}] ${stage}`, detail);
+}
 
 /**
  * 调用本地代理创建上游线程，并返回线程 ID。
@@ -85,6 +119,94 @@ export async function agentChat(ctx, { query, signal, threadId }) {
 }
 
 /**
+ * 分发解析后的 SSE 事件，兼容 JSON 负载与纯文本分片。
+ *
+ * @param {string} dataRaw SSE data 文本。
+ * @param {string} eventName SSE event 名称。
+ * @param {Function} onDelta 文本增量回调。
+ * @param {Function} onMeta 元信息回调。
+ * @param {{sawChunk: boolean}} state 流式读取状态。
+ */
+function dispatchStreamEvent(dataRaw, eventName, onDelta, onMeta, state) {
+  const payloadText = String(dataRaw || "").trim();
+  if (!payloadText || payloadText === "[DONE]") {
+    logSse(state.requestId, "event:skip", {
+      reason: payloadText === "[DONE]" ? "done" : "empty",
+      eventName: eventName || "",
+    });
+    return;
+  }
+
+  const data = safeJsonParse(payloadText, null);
+  if (data && typeof data === "object") {
+    const event = String(data.event || eventName || "");
+    logSse(state.requestId, "event:json", {
+      event: event || "message",
+      keys: Object.keys(data),
+      preview: previewText(payloadText),
+    });
+    if (event === "meta") {
+      const messageId = data.messageId ?? data.externalMessageId;
+      if (messageId !== undefined && messageId !== null) {
+        onMeta?.(String(messageId));
+      }
+      logSse(state.requestId, "event:meta", {
+        messageId: messageId !== undefined && messageId !== null ? String(messageId) : "",
+      });
+      return;
+    }
+
+    const messageId = data.messageId ?? data.externalMessageId;
+    if (messageId !== undefined && messageId !== null) {
+      onMeta?.(String(messageId));
+      logSse(state.requestId, "event:message-id", {
+        messageId: String(messageId),
+        event: event || "message",
+      });
+    }
+
+    const chunk = String(data.answer || data.content || data.message || "");
+    if (!chunk) {
+      logSse(state.requestId, "event:no-chunk", {
+        event: event || "message",
+      });
+      return;
+    }
+    if (event && event !== "message") {
+      logSse(state.requestId, "event:ignored", {
+        event,
+        preview: previewText(payloadText),
+      });
+      return;
+    }
+
+    state.sawChunk = true;
+    state.chunkCount += 1;
+    state.totalChars += chunk.length;
+    logSse(state.requestId, "event:chunk", {
+      event: event || "message",
+      chunkIndex: state.chunkCount,
+      chunkChars: chunk.length,
+      totalChars: state.totalChars,
+      preview: previewText(chunk),
+    });
+    onDelta?.(chunk);
+    return;
+  }
+
+  state.sawChunk = true;
+  state.chunkCount += 1;
+  state.totalChars += payloadText.length;
+  logSse(state.requestId, "event:text", {
+    chunkIndex: state.chunkCount,
+    chunkChars: payloadText.length,
+    totalChars: state.totalChars,
+    preview: previewText(payloadText),
+  });
+  onDelta?.(payloadText);
+}
+
+/**
  * 以流式方式请求聊天接口，并将分片消息逐步回传给 UI。
  *
  * @param {object} ctx 聊天上下文。
@@ -105,6 +227,13 @@ export async function agentChatStream(
   const config = { thread_id: threadId || null };
   const payload = { query, config };
   console.log("[Chatbot] chat stream payload:", payload);
+  const requestId = createStreamRequestId();
+  logSse(requestId, "request:start", {
+    url,
+    threadId: threadId || "",
+    queryChars: String(query || "").length,
+    queryPreview: previewText(query, 80),
+  });
 
   let res;
   try {
@@ -115,109 +244,109 @@ export async function agentChatStream(
       signal,
     });
   } catch (err) {
+    logSse(requestId, "request:error", {
+      stage: "fetch",
+      message: String(err?.message || err || ""),
+    });
     throw new Error(formatRuntimeError(err, "聊天请求失败"));
   }
 
   if (!res.ok) {
+    logSse(requestId, "request:http-error", {
+      status: res.status,
+      statusText: res.statusText,
+    });
     throw new Error(await readResponseError(res, "聊天请求失败"));
   }
 
-  let sawChunk = false;
+  logSse(requestId, "request:response", {
+    status: res.status,
+    contentType: res.headers.get("content-type") || "",
+    hasBody: Boolean(res.body),
+  });
 
-  /**
-   * 处理已经解析好的 SSE/JSON 负载，并把元信息或文本分发给调用方。
-   *
-   * @param {Record<string, any>} data 解析后的消息对象。
-   */
-  const handlePayload = (data) => {
-    if (!data || typeof data !== "object") return;
-    if (data.event === "meta") {
-      const messageId = data.messageId ?? data.externalMessageId;
-      if (messageId !== undefined && messageId !== null) {
-        onMeta?.(String(messageId));
-      }
-      return;
-    }
-    const messageId = data.messageId ?? data.externalMessageId;
-    if (messageId !== undefined && messageId !== null) {
-      onMeta?.(String(messageId));
-    }
-    const event = String(data.event || "");
-    const chunk = String(data.answer || data.content || data.message || "");
-    if (!chunk) return;
-    if (event && event !== "message") return;
-    sawChunk = true;
-    onDelta?.(chunk);
+  const state = {
+    requestId,
+    sawChunk: false,
+    chunkCount: 0,
+    totalChars: 0,
   };
-
-  /**
-   * 处理单个 SSE 帧，优先按 JSON 解析，失败时回退为纯文本分片。
-   *
-   * @param {string} frame 单个帧文本。
-   */
-  const handleFrame = (frame) => {
-    const lines = frame.split("\n").filter(Boolean);
-    const dataLines = [];
-    for (const line of lines) {
-      if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
-    }
-    const dataRaw = dataLines.length ? dataLines.join("\n").trim() : frame.trim();
-    if (!dataRaw || dataRaw === "[DONE]") return;
-    const data = safeJsonParse(dataRaw, null);
-    if (data) {
-      handlePayload(data);
-      return;
-    }
-    const stripped = dataRaw
-      .replace(/^event:.*$/gim, "")
-      .replace(/^data:\s*/gim, "")
-      .trim();
-    if (!stripped || stripped === "[DONE]") return;
-    sawChunk = true;
-    onDelta?.(stripped);
-  };
-
-  /**
-   * 处理浏览器未提供 Reader 时的纯文本回退响应。
-   *
-   * @param {string} text 完整响应文本。
-   */
-  const handleTextResponse = (text) => {
-    const normalized = String(text || "")
-      .replace(/\r\n/g, "\n")
-      .replace(/\r/g, "\n");
-    if (!normalized.trim()) return;
-    const frames = normalized.split("\n\n");
-    for (const frame of frames) {
-      if (frame.trim()) handleFrame(frame);
-    }
-    if (!sawChunk && normalized.trim()) {
-      onDelta?.(normalized.trim());
-    }
-  };
-
   const reader = res.body?.getReader();
   if (!reader) {
     const text = await res.text().catch(() => "");
-    handleTextResponse(text);
+    logSse(requestId, "reader:fallback", {
+      textChars: text.length,
+      preview: previewText(text),
+    });
+    dispatchStreamEvent(text, "", onDelta, onMeta, state);
+    logSse(requestId, "request:end", {
+      mode: "text",
+      sawChunk: state.sawChunk,
+      chunkCount: state.chunkCount,
+      totalChars: state.totalChars,
+    });
     return;
   }
 
   const decoder = new TextDecoder("utf-8");
-  let buffer = "";
+  const parser = createParser({
+    onEvent(event) {
+      dispatchStreamEvent(
+        event.data,
+        String(event.event || ""),
+        onDelta,
+        onMeta,
+        state,
+      );
+    },
+    onError(err) {
+      logSse(requestId, "parser:error", {
+        type: String(err?.type || ""),
+        field: String(err?.field || ""),
+        value: previewText(err?.value || ""),
+        line: previewText(err?.line || ""),
+        message: String(err?.message || ""),
+      });
+      // Ignore malformed SSE frames and continue reading the stream.
+    },
+    onRetry(retry) {
+      logSse(requestId, "parser:retry", { retry });
+    },
+    onComment(comment) {
+      logSse(requestId, "parser:comment", {
+        preview: previewText(comment),
+      });
+    }
+  });
+
+  let readCount = 0;
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    let idx;
-    while ((idx = buffer.indexOf("\n\n")) >= 0) {
-      const frame = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      if (frame.trim()) handleFrame(frame);
-    }
+    readCount += 1;
+    const chunkText = decoder.decode(value, { stream: true });
+    logSse(requestId, "reader:chunk", {
+      readIndex: readCount,
+      byteLength: value?.byteLength || 0,
+      textChars: chunkText.length,
+      preview: previewText(chunkText),
+    });
+    parser.feed(chunkText);
   }
-  if (buffer.trim()) {
-    handleFrame(buffer);
+
+  const tail = decoder.decode();
+  if (tail) {
+    logSse(requestId, "reader:tail", {
+      textChars: tail.length,
+      preview: previewText(tail),
+    });
+    parser.feed(tail);
   }
+  logSse(requestId, "request:end", {
+    mode: "stream",
+    readCount,
+    sawChunk: state.sawChunk,
+    chunkCount: state.chunkCount,
+    totalChars: state.totalChars,
+  });
 }
