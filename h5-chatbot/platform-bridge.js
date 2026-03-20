@@ -3,10 +3,21 @@ const isAndroid = /Android|Adr/i.test(ua);
 const isIos = /(iPhone|iPad|iPod)/i.test(ua);
 const isApp = isAndroid || isIos;
 
+/**
+ * 生成一段桥接回调 ID，避免不同调用间的回调名冲突。
+ *
+ * @returns {string} 回调 ID。
+ */
 function createCallbackId() {
   return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/**
+ * 统一拆包宿主回调结果，优先读取 `data` 字段。
+ *
+ * @param {*} payload 宿主返回的原始数据。
+ * @returns {*} 拆包后的数据。
+ */
 function unwrapPayload(payload) {
   if (payload && typeof payload === "object" && "data" in payload) {
     return payload.data;
@@ -14,6 +25,12 @@ function unwrapPayload(payload) {
   return payload;
 }
 
+/**
+ * 将宿主返回的用户信息规范化为对象。
+ *
+ * @param {*} raw 原始用户信息。
+ * @returns {object|null} 规范化后的用户信息对象。
+ */
 function normalizeUserInfo(raw) {
   const payload = unwrapPayload(raw);
   if (payload == null) return null;
@@ -30,6 +47,13 @@ function normalizeUserInfo(raw) {
   return null;
 }
 
+/**
+ * 通过 Android/iOS 宿主桥调用原生能力。
+ *
+ * @param {string} event 宿主事件名。
+ * @param {object} data 调用参数。
+ * @returns {Promise<*>} 宿主回调结果。
+ */
 function callApp(event, data = {}) {
   return new Promise((resolve, reject) => {
     if (!isApp) {
@@ -81,6 +105,11 @@ function callApp(event, data = {}) {
 }
 
 // Fetch user info from platform SDKs (Android/iOS), return normalized object.
+/**
+ * 从宿主平台 SDK 获取登录用户信息。
+ *
+ * @returns {Promise<object|null>} 规范化后的用户信息。
+ */
 async function getLoginUserInfo() {
   if (isAndroid && window.androidMethod && typeof window.androidMethod.jsGetUserBean === "function") {
     try {

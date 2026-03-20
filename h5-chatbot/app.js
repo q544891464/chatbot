@@ -5,11 +5,13 @@ import {
   deriveTitleFromMessages,
   formatConversationTime,
   getDefaultProxyBaseUrl,
+  formatRuntimeError,
   isProxyBaseUrl,
   normalizeBaseUrl,
   nowTime,
   pickPlatformUserId,
   randomId,
+  readResponseError,
   safeJsonParse,
   scrollToBottom,
   shouldAutoScroll,
@@ -91,6 +93,11 @@ const el = {
   imageViewerContent: document.getElementById("imageViewerContent"),
   imageViewerImg: document.getElementById("imageViewerImg"),
 };
+/**
+ * 从本地存储恢复页面配置，并补齐默认值。
+ *
+ * @returns {object} 当前页面配置。
+ */
 function loadConfig() {
   const saved = safeJsonParse(
     localStorage.getItem(STORAGE_KEY) || "null",
@@ -104,6 +111,11 @@ function loadConfig() {
   const platform = "agent";
   return { baseUrl, apiKey, userId, responseMode, platform };
 }
+/**
+ * 将页面配置持久化到本地存储。
+ *
+ * @param {object} cfg 页面配置对象。
+ */
 function saveConfig(cfg) {
   localStorage.setItem(
     STORAGE_KEY,
@@ -117,6 +129,12 @@ function saveConfig(cfg) {
   );
 } // Choose a stable identifier for server-side conversation storage.
 
+/**
+ * 归一化单个会话对象，保证字段齐全且消息数量受限。
+ *
+ * @param {object} item 原始会话对象。
+ * @returns {object} 规范化后的会话对象。
+ */
 function normalizeConversation(item) {
   const now = Date.now();
   const messages = Array.isArray(item?.messages) ? item.messages : [];
@@ -133,6 +151,12 @@ function normalizeConversation(item) {
     updatedAt: Number(item?.updatedAt || now),
   };
 }
+/**
+ * 基于种子数据创建一个新的本地会话对象。
+ *
+ * @param {object} seed 新会话的初始字段。
+ * @returns {object} 新建会话对象。
+ */
 function createConversation(seed) {
   const now = Date.now();
   const base = normalizeConversation({
@@ -146,6 +170,11 @@ function createConversation(seed) {
   });
   return base;
 }
+/**
+ * 计算当前页面应使用的会话存储/代理接口地址。
+ *
+ * @returns {string} 最终可用的 API Base URL。
+ */
 function getStoreBase() {
   const b = normalizeBaseUrl(state.config.baseUrl);
   if (b === "/api") {
@@ -154,14 +183,18 @@ function getStoreBase() {
   if (isProxyBaseUrl(b)) return b;
   return getDefaultProxyBaseUrl();
 }
+/**
+ * 从后端会话存储服务拉取当前用户的会话列表。
+ *
+ * @returns {Promise<{items: Array, activeId: string}>} 会话列表与当前激活会话 ID。
+ */
 async function fetchConversationsFromServer() {
   const url = `${getStoreBase()}/conversations?userId=${encodeURIComponent(state.config.userId)}`;
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
   });
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(txt || res.statusText || "load conversations failed");
+    throw new Error(await readResponseError(res, "加载会话失败"));
   }
   const data = await res.json();
   const items = Array.isArray(data?.items)
@@ -173,6 +206,12 @@ async function fetchConversationsFromServer() {
     : items[0]?.id || "";
   return { items, activeId };
 }
+/**
+ * 将前端会话对象转换成服务端同步所需的精简结构。
+ *
+ * @param {object} conv 当前会话对象。
+ * @returns {object} 可用于同步的会话负载。
+ */
 function serializeConversation(conv) {
   return {
     id: String(conv.id || randomId("conv")),
@@ -184,6 +223,11 @@ function serializeConversation(conv) {
     updatedAt: Number(conv.updatedAt || Date.now()),
   };
 }
+/**
+ * 将服务端返回的消息 ID 回填到本地消息对象中。
+ *
+ * @param {Record<string, Array>} messageIdMap 会话到消息 ID 的映射。
+ */
 function applyMessageIds(messageIdMap) {
   if (!messageIdMap || typeof messageIdMap !== "object") return;
   for (const conv of state.conversations) {
@@ -197,6 +241,12 @@ function applyMessageIds(messageIdMap) {
     });
   }
 }
+/**
+ * 将当前用户的会话列表同步到后端存储服务。
+ *
+ * @param {object} payload 同步负载。
+ * @returns {Promise<object>} 服务端同步结果。
+ */
 async function syncConversationsToServer(payload) {
   const url = `${getStoreBase()}/conversations/sync`;
   const res = await fetch(url, {
@@ -209,8 +259,7 @@ async function syncConversationsToServer(payload) {
     }),
   });
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(txt || res.statusText || "sync conversations failed");
+    throw new Error(await readResponseError(res, "同步会话失败"));
   }
   const data = await res.json().catch(() => ({}));
   if (data?.messageIds) {
@@ -218,6 +267,9 @@ async function syncConversationsToServer(payload) {
   }
   return data;
 }
+/**
+ * 对当前内存中的会话列表排序并异步同步到服务端。
+ */
 function saveConversations() {
   sortConversations();
   const payload = {
@@ -257,6 +309,11 @@ const IS_MOBILE = (() => {
   return /Android|webOS|iPhone|iPad|iPod|Mobile/i.test(ua) || touch > 1;
 })(); // Try to sync userId from the platform SDK before loading conversations.
 
+/**
+ * 尝试从宿主平台读取用户信息，并更新本地 userId。
+ *
+ * @returns {Promise<boolean>} 是否成功拿到平台用户。
+ */
 async function initPlatformUser() {
   try {
     const userInfo = await getLoginUserInfo();
@@ -273,6 +330,11 @@ async function initPlatformUser() {
     return false;
   }
 }
+/**
+ * 初始化会话列表，优先读取服务端，失败时回退到本地临时模式。
+ *
+ * @returns {Promise<void>}
+ */
 async function initConversations() {
   try {
     const data = await fetchConversationsFromServer();
@@ -284,8 +346,8 @@ async function initConversations() {
       updateConversationList();
       updateScrollButton();
     }
-  } catch {
-    setTips("未能连接会话存储服务，将在本地临时使用。");
+  } catch (err) {
+    setTips(`会话存储不可用，当前切换为本地临时模式：${formatRuntimeError(err, "加载会话失败")}`);
   }
   const legacy = safeJsonParse(
     localStorage.getItem(LEGACY_CHAT_KEY) || "null",
@@ -295,6 +357,11 @@ async function initConversations() {
     localStorage.removeItem(LEGACY_CHAT_KEY);
   }
 }
+/**
+ * 读取问题库文件，失败时回退到默认问题列表。
+ *
+ * @returns {Promise<void>}
+ */
 async function loadQuestionBank() {
   try {
     const res = await fetch("./question-bank.json", { cache: "no-store" });
@@ -315,20 +382,45 @@ async function loadQuestionBank() {
     state.questionBank = DEFAULT_QUESTION_BANK.slice();
   }
 }
+/**
+ * 判断当前配置是否满足聊天所需的最小条件。
+ *
+ * @param {object} cfg 页面配置。
+ * @returns {boolean} 是否可用于发送消息。
+ */
 function isConfigured(cfg) {
   if (!cfg.userId) return false;
   return true;
 }
+/**
+ * 更新页面提示文案。
+ *
+ * @param {string} text 待展示的提示文本。
+ */
 function setTips(text) {
   el.tips.textContent = text || "";
 }
+/**
+ * 返回平台展示名称。
+ *
+ * @param {string} platform 平台标识。
+ * @returns {string} 平台名称。
+ */
 function getPlatformLabel(platform) {
   return "ChatbotAgent";
 }
+/**
+ * 获取当前激活会话所属的平台类型。
+ *
+ * @returns {string} 平台标识。
+ */
 function getActivePlatform() {
   const conv = getActiveConversation();
   return conv.platform || "agent";
 }
+/**
+ * 更新连接状态提示。
+ */
 function setConnHint() {
   if (!isConfigured(state.config)) {
     el.connHint.textContent = "未配置平台";
@@ -336,6 +428,11 @@ function setConnHint() {
   }
   el.connHint.textContent = "已连接：ChatbotAgent";
 }
+/**
+ * 获取当前激活会话；若不存在则自动创建。
+ *
+ * @returns {object} 当前激活会话对象。
+ */
 function getActiveConversation() {
   let conv = state.conversations.find((item) => item.id === state.activeId);
   if (!conv) {
@@ -346,9 +443,15 @@ function getActiveConversation() {
   }
   return conv;
 }
+/**
+ * 按更新时间倒序排列会话列表。
+ */
 function sortConversations() {
   state.conversations.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 }
+/**
+ * 根据当前状态重绘会话列表。
+ */
 function updateConversationList() {
   if (!el.chatList) return;
   sortConversations();
@@ -374,14 +477,25 @@ function updateConversationList() {
     el.chatList.appendChild(item);
   }
 }
+/**
+ * 打开会话列表弹窗。
+ */
 function openChatList() {
   closeSettings();
   updateConversationList();
   el.chatListModal.setAttribute("aria-hidden", "false");
 }
+/**
+ * 关闭会话列表弹窗。
+ */
 function closeChatList() {
   el.chatListModal.setAttribute("aria-hidden", "true");
 }
+/**
+ * 切换当前激活会话并刷新相关 UI。
+ *
+ * @param {string} id 目标会话 ID。
+ */
 function selectConversation(id) {
   if (id === state.activeId) return;
   state.activeId = id;
@@ -395,6 +509,12 @@ function selectConversation(id) {
   setConnHint();
   updateConversationList();
 }
+/**
+ * 将文本复制到剪贴板，失败时回退到 document.execCommand。
+ *
+ * @param {string} text 待复制文本。
+ * @returns {Promise<boolean>} 是否复制成功。
+ */
 async function copyToClipboard(text) {
   const value = String(text || "");
   if (!value) return false;
@@ -419,6 +539,11 @@ async function copyToClipboard(text) {
     }
   }
 }
+/**
+ * 生成空状态页面节点，包含欢迎语和推荐问题。
+ *
+ * @returns {{wrap: HTMLElement}} 空状态根节点。
+ */
 function createEmptyStateNode() {
   const wrap = document.createElement("section");
   wrap.className = "empty";
@@ -459,12 +584,25 @@ function createEmptyStateNode() {
   wrap.appendChild(card);
   return { wrap };
 }
+/**
+ * 将推荐问题填入输入框，并记录本次输入来源于推荐项。
+ *
+ * @param {string} text 推荐问题文本。
+ */
 function setInputFromSuggestion(text) {
   el.input.value = text;
   updateTextareaHeight();
   el.input.focus();
   state.promptSelection = { pending: true, value: text };
 }
+/**
+ * 从问题池中随机选择若干条问题，并排除当前问题。
+ *
+ * @param {string[]} list 问题池。
+ * @param {number} count 需要抽取的数量。
+ * @param {string} exclude 需要排除的问题。
+ * @returns {string[]} 随机问题列表。
+ */
 function pickRandomQuestions(list, count, exclude) {
   const pool = (list || []).filter((item) => item && item !== exclude);
   if (!pool.length) return [];
@@ -474,10 +612,18 @@ function pickRandomQuestions(list, count, exclude) {
   }
   return pool.slice(0, Math.max(0, count));
 }
+/**
+ * 清理消息区底部的追问推荐模块。
+ */
 function clearFollowupSuggestions() {
   const existing = el.messages.querySelector(".followup");
   existing?.remove();
 }
+/**
+ * 渲染“猜你想问”追问推荐模块。
+ *
+ * @param {string[]} items 推荐问题列表。
+ */
 function renderFollowupSuggestions(items) {
   clearFollowupSuggestions();
   if (!items || !items.length) return;
@@ -501,6 +647,14 @@ function renderFollowupSuggestions(items) {
   el.messages.appendChild(wrap);
   if (shouldAutoScroll(el.messages)) scrollToBottom(el.messages);
 }
+/**
+ * 按角色与状态更新消息气泡内容。
+ *
+ * @param {HTMLElement} bubble 消息气泡节点。
+ * @param {"user"|"assistant"} role 消息角色。
+ * @param {string} content 消息内容。
+ * @param {string} status 消息状态。
+ */
 function setBubbleContent(bubble, role, content, status) {
   if (role === "assistant") {
     bubble.classList.add("md");
@@ -520,6 +674,12 @@ ${thinkingHtml}`
     bubble.textContent = content || "";
   }
 }
+/**
+ * 为单条消息创建 DOM 结构及其交互逻辑。
+ *
+ * @param {object} message 消息对象。
+ * @returns {{wrap: HTMLElement, bubble: HTMLElement, meta: HTMLElement}} 消息节点引用。
+ */
 function createMessageNode(message) {
   const { role, content, time, status } = message;
   const wrap = document.createElement("section");
@@ -641,6 +801,9 @@ function createMessageNode(message) {
   }
   return { wrap, bubble, meta };
 }
+/**
+ * 根据当前激活会话重绘消息区。
+ */
 function renderAll() {
   el.messages.innerHTML = "";
   const conv = getActiveConversation();
@@ -655,6 +818,9 @@ function renderAll() {
   }
   scrollToBottom(el.messages);
 }
+/**
+ * 打开设置面板并同步当前配置到表单。
+ */
 function openSettings() {
   closeChatList();
   if (el.baseUrl) el.baseUrl.value = state.config.baseUrl;
@@ -668,14 +834,23 @@ function openSettings() {
   el.modal.setAttribute("aria-hidden", "false");
   setTimeout(() => el.userId?.focus(), 0);
 }
+/**
+ * 关闭设置面板。
+ */
 function closeSettings() {
   el.modal.setAttribute("aria-hidden", "true");
 }
+/**
+ * 根据输入内容动态调整文本域高度。
+ */
 function updateTextareaHeight() {
   el.input.style.height = "auto";
   el.input.style.height = `${Math.min(el.input.scrollHeight, window.innerHeight * 0.4)}
 px`;
 }
+/**
+ * 刷新设置面板中的平台相关控件状态。
+ */
 function updatePlatformUI() {
   if (el.platform) {
     el.platform.value = "agent";
@@ -694,15 +869,33 @@ function updatePlatformUI() {
   }
 }
 const imageViewerState = { scale: 1, baseScale: 1, startDist: 0 };
+/**
+ * 更新图片预览器缩放比例。
+ *
+ * @param {number} scale 目标缩放值。
+ */
 function setImageScale(scale) {
   imageViewerState.scale = Math.max(1, Math.min(3, scale));
   el.imageViewerImg.style.transform = `scale(${imageViewerState.scale})`;
 }
+/**
+ * 计算两个触点之间的距离。
+ *
+ * @param {Touch} t1 第一个触点。
+ * @param {Touch} t2 第二个触点。
+ * @returns {number} 两点之间的距离。
+ */
 function getTouchDistance(t1, t2) {
   const dx = t1.clientX - t2.clientX;
   const dy = t1.clientY - t2.clientY;
   return Math.hypot(dx, dy);
 }
+/**
+ * 打开图片预览弹层。
+ *
+ * @param {string} src 图片地址。
+ * @param {string} alt 图片说明文本。
+ */
 function openImageViewer(src, alt) {
   if (!el.imageViewer || !el.imageViewerImg) return;
   el.imageViewerImg.src = src;
@@ -710,12 +903,18 @@ function openImageViewer(src, alt) {
   setImageScale(1);
   el.imageViewer.setAttribute("aria-hidden", "false");
 }
+/**
+ * 关闭图片预览弹层并重置状态。
+ */
 function closeImageViewer() {
   if (!el.imageViewer || !el.imageViewerImg) return;
   el.imageViewer.setAttribute("aria-hidden", "true");
   el.imageViewerImg.src = "";
   setImageScale(1);
 }
+/**
+ * 根据当前视口高度更新页面 CSS 变量。
+ */
 function updateVhVar() {
   const h = window.visualViewport?.height || window.innerHeight;
   document.documentElement.style.setProperty(
@@ -724,6 +923,11 @@ function updateVhVar() {
 px`,
   );
 }
+/**
+ * 组合当前用户元信息，供线程创建和聊天接口使用。
+ *
+ * @returns {{userName: string, org: string, phone: string}} 用户元数据。
+ */
 function getUserMeta() {
   const info = state.platformUser || {};
   const userName = String(
@@ -739,6 +943,9 @@ function getUserMeta() {
     phone: phone || DEFAULT_USER_META.phone,
   };
 }
+/**
+ * 刷新设置面板中的用户信息展示。
+ */
 function updateUserInfoDisplay() {
   if (!el.userInfoName && !el.userInfoPhone && !el.userInfoOrg) return;
   const info = state.platformUser || {};
@@ -756,6 +963,11 @@ function updateUserInfoDisplay() {
   if (el.userInfoOrg) el.userInfoOrg.textContent = orgText;
   if (el.userInfoPhone) el.userInfoPhone.textContent = phoneText;
 }
+/**
+ * 将认证接口返回的用户信息写入本地状态。
+ *
+ * @param {object} userInfo 认证接口返回的用户信息。
+ */
 function applyUserInfoFromResponse(userInfo) {
   const name = String(userInfo?.name || "").trim();
   const phone = String(userInfo?.phone_number || "").trim();
@@ -768,6 +980,11 @@ function applyUserInfoFromResponse(userInfo) {
     updateConversationList();
   }
 }
+/**
+ * 组装认证模块所需上下文。
+ *
+ * @returns {object} 认证上下文。
+ */
 function getAuthCtx() {
   return {
     state,
@@ -777,6 +994,11 @@ function getAuthCtx() {
     onUserInfo: applyUserInfoFromResponse,
   };
 }
+/**
+ * 组装反馈模块所需上下文。
+ *
+ * @returns {object} 反馈上下文。
+ */
 function getFeedbackCtx() {
   return {
     state,
@@ -786,6 +1008,11 @@ function getFeedbackCtx() {
     feedbackEndpointPath: FEEDBACK_ENDPOINT_PATH,
   };
 }
+/**
+ * 组装聊天 API 模块所需上下文。
+ *
+ * @returns {object} 聊天上下文。
+ */
 function getChatApiCtx() {
   return {
     getStoreBase,
@@ -793,14 +1020,27 @@ function getChatApiCtx() {
     AGENT_ID,
   };
 }
+/**
+ * 在请求进行中切换发送与停止按钮状态。
+ *
+ * @param {boolean} busy 当前是否处于请求中。
+ */
 function setBusy(busy) {
   el.sendBtn.disabled = busy;
   el.stopBtn.hidden = !busy;
 }
+/**
+ * 根据滚动位置控制“滚到底部”按钮显示。
+ */
 function updateScrollButton() {
   const show = !shouldAutoScroll(el.messages);
   el.scrollBtn.hidden = !show;
 }
+/**
+ * 发送当前输入内容，并驱动整条消息生命周期。
+ *
+ * @returns {Promise<void>}
+ */
 async function sendMessage() {
   if (state.inFlight) return;
   const text = String(el.input.value || "").trim();
@@ -957,7 +1197,7 @@ async function sendMessage() {
       conv.updatedAt = Date.now();
       saveConversations();
       updateConversationList();
-      const detail = String(err?.message || err || "").trim();
+      const detail = formatRuntimeError(err, "聊天请求失败");
       setTips(
         detail ||
           (isProxyBaseUrl(state.config.baseUrl)
@@ -971,11 +1211,19 @@ async function sendMessage() {
     setConnHint();
   }
 }
+/**
+ * 主动中断当前正在进行中的流式响应。
+ */
 function stopGeneration() {
   if (!state.inFlight) return;
   state.inFlight.abort();
   setTips("正在停止...");
 }
+/**
+ * 重置当前会话的 conversationId。
+ *
+ * @param {object} options 重置选项。
+ */
 function resetConversation(options) {
   const silent = Boolean(options?.silent);
   const conv = getActiveConversation();
@@ -988,6 +1236,9 @@ function resetConversation(options) {
   }
   setConnHint();
 }
+/**
+ * 清空当前会话消息并保留会话对象。
+ */
 function clearChat() {
   const conv = getActiveConversation();
   conv.messages = [];
@@ -1002,6 +1253,9 @@ function clearChat() {
   updateConversationList();
   setTips("聊天已清空。");
 }
+/**
+ * 在用户确认后清空当前会话。
+ */
 function clearChatWithConfirm() {
   if (state.inFlight) stopGeneration();
   const conv = getActiveConversation();
@@ -1010,6 +1264,9 @@ function clearChatWithConfirm() {
   resetConversation({ silent: true });
   clearChat();
 }
+/**
+ * 新建一个空白会话并切换到该会话。
+ */
 function newChat() {
   const conv = createConversation({ platform: "agent" });
   state.conversations.unshift(conv);
@@ -1143,6 +1400,11 @@ if (IS_MOBILE) {
 } else {
   el.input.setAttribute("enterkeyhint", "send");
 }
+/**
+ * 页面启动入口，负责初始化用户、认证、会话和界面状态。
+ *
+ * @returns {Promise<void>}
+ */
 async function bootstrap() {
   await initPlatformUser();
   const hasAuthCode = captureAuthCodeFromUrl(getAuthCtx());

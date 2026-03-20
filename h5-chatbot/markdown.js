@@ -1,3 +1,9 @@
+/**
+ * 对原始文本做 HTML 转义，避免渲染时注入标签。
+ *
+ * @param {string} text 原始文本。
+ * @returns {string} 转义后的文本。
+ */
 function escapeHtml(text) {
   return String(text || "")
     .replace(/&/g, "&amp;")
@@ -7,10 +13,22 @@ function escapeHtml(text) {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * 判断一个 URL 是否指向图片资源。
+ *
+ * @param {string} url 待判断的 URL。
+ * @returns {boolean} 是否为图片 URL。
+ */
 function isImageUrl(url) {
   return /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url || "");
 }
 
+/**
+ * 渲染行内 Markdown，包括强调、链接、图片和行内代码。
+ *
+ * @param {string} escapedText 已做 HTML 转义的文本。
+ * @returns {string} 行内 Markdown 对应的 HTML。
+ */
 function renderInlineMarkdown(escapedText) {
   let out = String(escapedText || "");
   const placeholders = [];
@@ -72,6 +90,12 @@ function renderInlineMarkdown(escapedText) {
   return out;
 }
 
+/**
+ * 对 Markdown 文本做预清洗，增强列表、标题和表格的识别率。
+ *
+ * @param {string} text 原始 Markdown 文本。
+ * @returns {string} 预处理后的 Markdown 文本。
+ */
 function normalizeMarkdownText(text) {
   let out = String(text || "");
   const urls = [];
@@ -99,6 +123,12 @@ function normalizeMarkdownText(text) {
   return out;
 }
 
+/**
+ * 将聊天内容渲染为轻量版 Markdown HTML。
+ *
+ * @param {string} text 原始消息文本。
+ * @returns {string} 渲染后的 HTML。
+ */
 function renderMarkdownLite(text) {
   const src = String(text || "")
     .replace(/\r\n/g, "\n")

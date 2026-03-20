@@ -51,6 +51,11 @@ const pool = mysql.createPool({
 
 const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
 
+/**
+ * 启动时检查并补齐数据库缺失字段，兼容旧表结构。
+ *
+ * @returns {Promise<void>}
+ */
 async function ensureSchema() {
   const conn = await pool.getConnection();
   try {
@@ -73,6 +78,14 @@ async function ensureSchema() {
   }
 }
 
+/**
+ * 对 fetch 做统一包装，补充网络不可达时的错误来源描述。
+ *
+ * @param {string} url 目标地址。
+ * @param {object} options fetch 配置。
+ * @param {string} label 错误来源标签。
+ * @returns {Promise<Response>} fetch 响应对象。
+ */
 async function safeFetch(url, options, label) {
   try {
     return await fetch(url, options);
@@ -82,6 +95,11 @@ async function safeFetch(url, options, label) {
   }
 }
 
+/**
+ * 返回所有接口共用的 CORS 响应头。
+ *
+ * @returns {Record<string, string>} CORS 响应头。
+ */
 function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": CORS_ORIGIN,
@@ -91,18 +109,39 @@ function corsHeaders() {
   };
 }
 
+/**
+ * 计算 OAuth 授权地址。
+ *
+ * @returns {string} 授权地址。
+ */
 function getAuthAuthorizeUrlBase() {
   return buildAuthUrl(AUTH_AUTHORIZE_PATH);
 }
 
+/**
+ * 计算 OAuth token 地址。
+ *
+ * @returns {string} token 地址。
+ */
 function getAuthTokenUrlBase() {
   return buildAuthUrl(AUTH_TOKEN_PATH);
 }
 
+/**
+ * 计算 OAuth userinfo 地址。
+ *
+ * @returns {string} userinfo 地址。
+ */
 function getAuthUserInfoUrlBase() {
   return buildAuthUrl(AUTH_USERINFO_PATH);
 }
 
+/**
+ * 根据环境变量和值形式构建完整认证 URL。
+ *
+ * @param {string} pathValue 原始路径或完整 URL。
+ * @returns {string} 最终可请求的 URL。
+ */
 function buildAuthUrl(pathValue) {
   let raw = String(pathValue || "").trim();
   if (!raw) return "";
@@ -121,6 +160,12 @@ function buildAuthUrl(pathValue) {
   return new URL(normalizedPath, normalizedBase).toString().replace(/\/$/, "");
 }
 
+/**
+ * 构造反馈接口地址。
+ *
+ * @param {string} messageId 外部消息 ID。
+ * @returns {string} 反馈接口地址。
+ */
 function getFeedbackUrl(messageId) {
   if (!FEEDBACK_BASE_URL) return "";
   const trimmed = String(messageId || "").trim();
@@ -130,11 +175,103 @@ function getFeedbackUrl(messageId) {
   )}/feedback`;
 }
 
+/**
+ * 以 JSON 形式返回响应。
+ *
+ * @param {http.ServerResponse} res 响应对象。
+ * @param {number} status HTTP 状态码。
+ * @param {object} obj 返回对象。
+ */
 function sendJson(res, status, obj) {
   res.writeHead(status, { ...corsHeaders(), "Content-Type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(obj));
 }
 
+/**
+ * 尝试从上游原始错误内容中提取最有价值的错误明细。
+ *
+ * @param {string} raw 原始错误文本。
+ * @returns {string} 提取后的错误明细。
+ */
+function extractErrorDetail(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return "";
+  try {
+    const data = JSON.parse(text);
+    const detail = data?.error || data?.message || data?.detail || "";
+    return String(detail || text).trim();
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * 将 HTTP 状态码映射为中文错误分类。
+ *
+ * @param {number} status HTTP 状态码。
+ * @returns {string} 中文错误分类。
+ */
+function formatStatusLabel(status) {
+  if (status === 400) return "请求参数错误";
+  if (status === 401) return "认证失败";
+  if (status === 403) return "无权限访问";
+  if (status === 404) return "接口不存在";
+  if (status === 408) return "请求超时";
+  if (status === 409) return "数据冲突";
+  if (status === 422) return "请求格式不正确";
+  if (status >= 500) return "上游服务异常";
+  return "请求失败";
+}
+
+/**
+ * 统一格式化上游接口返回的错误结构。
+ *
+ * @param {string} source 错误来源。
+ * @param {number} status HTTP 状态码。
+ * @param {string} raw 上游原始错误文本。
+ * @param {object} extra 额外字段。
+ * @returns {object} 标准化错误对象。
+ */
+function formatUpstreamError(source, status, raw, extra = {}) {
+  const detail = extractErrorDetail(raw);
+  const base = `${source}${formatStatusLabel(status)}（HTTP ${status}）`;
+  return {
+    error: detail ? `${base}：${detail}` : base,
+    source,
+    status,
+    ...extra,
+  };
+}
+
+/**
+ * 将后端内部异常转换成更适合排障的中文提示。
+ *
+ * @param {Error & {code?: string}} err 异常对象。
+ * @returns {string} 可读的中文错误描述。
+ */
+function formatInternalError(err) {
+  const code = String(err?.code || "");
+  if (code === "ER_BAD_FIELD_ERROR") {
+    return "数据库字段缺失，请执行最新表结构迁移";
+  }
+  if (code === "ER_NO_SUCH_TABLE") {
+    return "数据库表不存在，请初始化数据库";
+  }
+  if (code === "ER_ACCESS_DENIED_ERROR") {
+    return "数据库认证失败，请检查 DB_USER / DB_PASSWORD";
+  }
+  if (code === "ECONNREFUSED") {
+    return "数据库连接被拒绝，请确认 MySQL 已启动";
+  }
+  return String(err?.message || err || "Unknown server error");
+}
+
+/**
+ * 根据静态文件扩展名推断 Content-Type。
+ *
+ * @param {string} filePath 文件路径。
+ * @returns {string} Content-Type。
+ */
 function guessContentType(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".html") return "text/html; charset=utf-8";
@@ -148,6 +285,12 @@ function guessContentType(filePath) {
   return "application/octet-stream";
 }
 
+/**
+ * 读取并解析 JSON 请求体。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @returns {Promise<object>} 解析后的 JSON 数据。
+ */
 async function readBodyJson(req) {
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
@@ -162,6 +305,12 @@ async function readBodyJson(req) {
 }
 
 
+/**
+ * 归一化单条消息对象，兼容不同字段命名。
+ *
+ * @param {object} msg 原始消息对象。
+ * @returns {object} 规范化后的消息对象。
+ */
 function normalizeMessage(msg) {
   const role = msg?.role === "assistant" ? "assistant" : "user";
   const content = String(msg?.content || "");
@@ -182,6 +331,12 @@ function normalizeMessage(msg) {
   return base;
 }
 
+/**
+ * 归一化单个会话对象，确保数据库同步所需字段齐全。
+ *
+ * @param {object} item 原始会话对象。
+ * @returns {object} 规范化后的会话对象。
+ */
 function normalizeConversation(item) {
   const now = Date.now();
   const messages = Array.isArray(item?.messages) ? item.messages.map(normalizeMessage) : [];
@@ -197,6 +352,12 @@ function normalizeConversation(item) {
   };
 }
 
+/**
+ * 归一化用户会话同步负载。
+ *
+ * @param {object} payload 原始同步负载。
+ * @returns {{items: Array, activeId: string}} 规范化后的结果。
+ */
 function normalizeUserPayload(payload) {
   const items = Array.isArray(payload?.items) ? payload.items.map(normalizeConversation) : [];
   const preferredActive = String(payload?.activeId || "");
@@ -207,6 +368,11 @@ function normalizeUserPayload(payload) {
 const altTokenCache = { token: "", expMs: 0 };
 let altTokenPromise = null;
 
+/**
+ * 计算线程创建接口地址，优先使用显式配置。
+ *
+ * @returns {string} 线程接口地址。
+ */
 function getAltThreadUrl() {
   if (ALT_THREAD_URL) return ALT_THREAD_URL;
   const marker = "/api/chat/agent/";
@@ -218,6 +384,12 @@ function getAltThreadUrl() {
   return "";
 }
 
+/**
+ * 解析 JWT 中的 exp 字段。
+ *
+ * @param {string} token JWT 字符串。
+ * @returns {number} 过期时间的 Unix 秒级时间戳。
+ */
 function parseJwtExp(token) {
   const parts = String(token || "").split(".");
   if (parts.length < 2) return 0;
@@ -232,10 +404,20 @@ function parseJwtExp(token) {
   }
 }
 
+/**
+ * 判断缓存中的上游 token 是否仍然有效。
+ *
+ * @returns {boolean} token 是否有效。
+ */
 function hasValidAltToken() {
   return altTokenCache.token && Date.now() < altTokenCache.expMs;
 }
 
+/**
+ * 使用用户名密码向上游认证服务申请 token。
+ *
+ * @returns {Promise<string>} 上游 access token。
+ */
 async function requestAltToken() {
   if (!ALT_AUTH_URL || !ALT_AUTH_USERNAME || !ALT_AUTH_PASSWORD) {
     throw new Error("Missing ALT auth config");
@@ -272,6 +454,11 @@ async function requestAltToken() {
   return token;
 }
 
+/**
+ * 获取可用的上游认证 token，优先使用缓存，其次动态申请。
+ *
+ * @returns {Promise<string>} 上游 access token。
+ */
 async function getAltAuthToken() {
   if (ALT_AUTH_URL) {
     if (hasValidAltToken()) return altTokenCache.token;
@@ -287,6 +474,12 @@ async function getAltAuthToken() {
   return ALT_API_TOKEN;
 }
 
+/**
+ * 从数据库读取指定用户的完整会话及消息列表。
+ *
+ * @param {string} userKey 用户唯一标识。
+ * @returns {Promise<{items: Array, activeId: string}>} 会话列表和激活会话 ID。
+ */
 async function fetchUserConversations(userKey) {
   const conn = await pool.getConnection();
   try {
@@ -350,6 +543,13 @@ async function fetchUserConversations(userKey) {
   }
 }
 
+/**
+ * 将用户会话列表整体写回数据库，并返回新生成的消息 ID 映射。
+ *
+ * @param {string} userKey 用户唯一标识。
+ * @param {object} payload 会话同步负载。
+ * @returns {Promise<{messageIds: Record<string, Array<number>>}>} 消息 ID 映射。
+ */
 async function syncUserConversations(userKey, payload) {
   const normalized = normalizeUserPayload(payload);
   const messageIds = {};
@@ -439,6 +639,13 @@ async function syncUserConversations(userKey, payload) {
   }
 }
 
+/**
+ * 转发 Dify `/chat-messages` 接口，并保持流式响应能力。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleChatMessages(req, res) {
   if (!DIFY_API_KEY) {
     sendJson(res, 500, { error: "Missing DIFY_API_KEY env var on server" });
@@ -479,6 +686,14 @@ async function handleChatMessages(req, res) {
   Readable.fromWeb(upstreamRes.body).pipe(res);
 }
 
+/**
+ * 处理会话列表读取接口。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @param {URL} url 已解析的请求 URL。
+ * @returns {Promise<void>}
+ */
 async function handleConversationsList(req, res, url) {
   const userId = String(url.searchParams.get("userId") || "");
   if (!userId) {
@@ -490,6 +705,13 @@ async function handleConversationsList(req, res, url) {
   sendJson(res, 200, { items: data.items || [], activeId: data.activeId || "" });
 }
 
+/**
+ * 处理会话列表同步接口。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleConversationsSync(req, res) {
   const body = await readBodyJson(req);
   const userId = String(body?.userId || "");
@@ -502,6 +724,12 @@ async function handleConversationsSync(req, res) {
   sendJson(res, 200, { ok: true, messageIds: result.messageIds || {} });
 }
 
+/**
+ * 从上游聊天响应对象中提取最终答案文本。
+ *
+ * @param {object|string} data 上游响应对象或字符串。
+ * @returns {string} 提取到的答案文本。
+ */
 function extractAltAnswer(data) {
   if (typeof data === "string") return data;
   if (!data || typeof data !== "object") return "";
@@ -539,6 +767,12 @@ function extractAltAnswer(data) {
   return "";
 }
 
+/**
+ * 从上游聊天响应对象中提取错误文本。
+ *
+ * @param {object} data 上游响应对象。
+ * @returns {string} 错误文本。
+ */
 function extractAltError(data) {
   if (!data || typeof data !== "object") return "";
   const status = String(data.status || "");
@@ -554,6 +788,12 @@ function extractAltError(data) {
   return typeof msg === "string" ? msg.trim() : "";
 }
 
+/**
+ * 去除上游响应中的思维链或分析标签。
+ *
+ * @param {string} text 原始文本。
+ * @returns {string} 清洗后的文本。
+ */
 function stripAltText(text) {
   let out = String(text || "");
   if (!out) return "";
@@ -563,6 +803,11 @@ function stripAltText(text) {
   return out;
 }
 
+/**
+ * 将上游原始负载输出到日志，便于排障。
+ *
+ * @param {object} payload 上游负载对象。
+ */
 function logAltRawPayload(payload) {
   if (!payload || typeof payload !== "object") return;
   try {
@@ -574,6 +819,12 @@ function logAltRawPayload(payload) {
   }
 }
 
+/**
+ * 从上游负载中提取外部消息 ID。
+ *
+ * @param {object} payload 上游负载对象。
+ * @returns {string} 外部消息 ID。
+ */
 function extractAltMessageId(payload) {
   if (!payload || typeof payload !== "object") return "";
   const metadata = payload.metadata || payload.meta || {};
@@ -587,6 +838,13 @@ function extractAltMessageId(payload) {
   return String(raw);
 }
 
+/**
+ * 清理流式响应中的工具调用 XML 片段。
+ *
+ * @param {object} state 文本过滤状态。
+ * @param {string} text 原始文本。
+ * @returns {string} 清洗后的文本。
+ */
 function stripToolBlocks(state, text) {
   let out = "";
   let rest = String(text || "");
@@ -626,6 +884,13 @@ function stripToolBlocks(state, text) {
   return out;
 }
 
+/**
+ * 清理知识库或工具调用产生的大段结构化输出。
+ *
+ * @param {object} state 文本过滤状态。
+ * @param {string} text 原始文本。
+ * @returns {string} 清洗后的文本。
+ */
 function stripToolDump(state, text) {
   const raw = String(text || "");
   if (!raw) return "";
@@ -667,6 +932,13 @@ function stripToolDump(state, text) {
   return kept.join("\n");
 }
 
+/**
+ * 对上游文本做统一过滤，去除工具调用和无关调试信息。
+ *
+ * @param {object} state 文本过滤状态。
+ * @param {string} text 原始文本。
+ * @returns {string} 清洗后的文本。
+ */
 function filterAltText(state, text) {
   let out = stripAltText(text);
   out = stripToolBlocks(state, out);
@@ -677,6 +949,12 @@ function filterAltText(state, text) {
   return out;
 }
 
+/**
+ * 判断当前上游负载是否主要包含工具调用信息。
+ *
+ * @param {object} payload 上游负载对象。
+ * @returns {boolean} 是否为工具调用负载。
+ */
 function hasToolPayload(payload) {
   const msg = payload?.msg || {};
   const toolCalls = msg.tool_calls || payload.tool_calls;
@@ -690,6 +968,13 @@ function hasToolPayload(payload) {
   return false;
 }
 
+/**
+ * 处理新增流式分片，并返回真正需要输出给前端的增量文本。
+ *
+ * @param {object} state 流式解析状态。
+ * @param {string} chunk 当前分片。
+ * @returns {string} 过滤后的增量文本。
+ */
 function appendAltStream(state, chunk) {
   if (chunk === "") return "";
 
@@ -709,6 +994,12 @@ function appendAltStream(state, chunk) {
   return delta;
 }
 
+/**
+ * 消费单条上游 JSON 负载，更新当前流式解析状态。
+ *
+ * @param {object} state 流式解析状态。
+ * @param {object} payload 上游负载对象。
+ */
 function consumeAltPayload(state, payload) {
   if (!payload || typeof payload !== "object") return;
   state.hasParsed = true;
@@ -765,6 +1056,12 @@ function consumeAltPayload(state, payload) {
   }
 }
 
+/**
+ * 尝试解析一行上游流式文本，并合并到解析状态。
+ *
+ * @param {object} state 流式解析状态。
+ * @param {string} line 单行文本。
+ */
 function tryParseAltLine(state, line) {
   let text = String(line || "").trim();
   if (!text) return;
@@ -782,6 +1079,12 @@ function tryParseAltLine(state, line) {
   }
 }
 
+/**
+ * 将上游聊天响应流解析成完整答案、原始负载和外部消息 ID。
+ *
+ * @param {Response} upstreamRes 上游响应对象。
+ * @returns {Promise<{answer: string, raw: object|null, externalMessageId: string}>} 解析结果。
+ */
 async function readAltResponse(upstreamRes) {
   const reader = upstreamRes.body?.getReader();
   if (!reader) {
@@ -851,16 +1154,23 @@ async function readAltResponse(upstreamRes) {
   };
 }
 
+/**
+ * 处理阻塞式聊天接口，向上游发送请求并返回完整答案。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleAltChat(req, res) {
   if (!ALT_API_URL) {
-    sendJson(res, 500, { error: "Missing ALT_API_URL env var on server" });
+    sendJson(res, 500, { error: "服务端缺少 ALT_API_URL 配置", source: "server-config" });
     return;
   }
   let token = "";
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    sendJson(res, 500, { error: String(err?.message || err) });
+    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
   }
 
@@ -887,7 +1197,7 @@ async function handleAltChat(req, res) {
 
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
-    sendJson(res, upstreamRes.status, { error: txt || upstreamRes.statusText || "Request failed" });
+    sendJson(res, upstreamRes.status, formatUpstreamError("聊天上游", upstreamRes.status, txt));
     return;
   }
 
@@ -899,6 +1209,12 @@ async function handleAltChat(req, res) {
   });
 }
 
+/**
+ * 从上游负载中提取当前可直接输出的文本分片。
+ *
+ * @param {object} payload 上游负载对象。
+ * @returns {string|null} 文本分片或 null。
+ */
 function extractAltChunk(payload) {
   if (!payload || typeof payload !== "object") return null;
   const errorText = extractAltError(payload);
@@ -926,6 +1242,12 @@ function extractAltChunk(payload) {
   return null;
 }
 
+/**
+ * 在流式结束前尝试捕获最终答案文本。
+ *
+ * @param {object} state 流式解析状态。
+ * @param {object} payload 上游负载对象。
+ */
 function captureAltFinalText(state, payload) {
   if (!payload || typeof payload !== "object") return;
   if (state.finalText) return;
@@ -951,16 +1273,23 @@ function captureAltFinalText(state, payload) {
   if (text) state.finalText = text;
 }
 
+/**
+ * 处理流式聊天接口，并将上游结果转成前端可消费的 SSE。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleAltChatStream(req, res) {
   if (!ALT_API_URL) {
-    sendJson(res, 500, { error: "Missing ALT_API_URL env var on server" });
+    sendJson(res, 500, { error: "服务端缺少 ALT_API_URL 配置", source: "server-config" });
     return;
   }
   let token = "";
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    sendJson(res, 500, { error: String(err?.message || err) });
+    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
   }
 
@@ -987,7 +1316,7 @@ async function handleAltChatStream(req, res) {
 
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
-    sendJson(res, upstreamRes.status, { error: txt || upstreamRes.statusText || "Request failed" });
+    sendJson(res, upstreamRes.status, formatUpstreamError("聊天上游", upstreamRes.status, txt));
     return;
   }
 
@@ -1149,10 +1478,17 @@ async function handleAltChatStream(req, res) {
   res.end();
 }
 
+/**
+ * 处理线程创建接口，向上游申请新的对话线程。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleAltThread(req, res) {
   const threadUrl = getAltThreadUrl();
   if (!threadUrl) {
-    sendJson(res, 500, { error: "Missing ALT_THREAD_URL env var on server" });
+    sendJson(res, 500, { error: "服务端缺少 ALT_THREAD_URL 配置", source: "server-config" });
     return;
   }
 
@@ -1160,7 +1496,7 @@ async function handleAltThread(req, res) {
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    sendJson(res, 500, { error: String(err?.message || err) });
+    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
   }
 
@@ -1183,7 +1519,7 @@ async function handleAltThread(req, res) {
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
-    sendJson(res, upstreamRes.status, { error: text || upstreamRes.statusText || "Request failed" });
+    sendJson(res, upstreamRes.status, formatUpstreamError("线程上游", upstreamRes.status, text));
     return;
   }
 
@@ -1195,14 +1531,21 @@ async function handleAltThread(req, res) {
   }
 }
 
+/**
+ * 处理 OAuth 授权码换 token 接口。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleAuthToken(req, res) {
   const tokenUrl = getAuthTokenUrlBase();
   if (!tokenUrl) {
-    sendJson(res, 500, { error: "Missing AUTH_SERVER_DOMAIN env var on server" });
+    sendJson(res, 500, { error: "服务端缺少 AUTH_SERVER_DOMAIN 配置", source: "server-config" });
     return;
   }
   if (!AUTH_CLIENT_ID || !AUTH_CLIENT_SECRET) {
-    sendJson(res, 500, { error: "Missing AUTH_CLIENT_ID/AUTH_CLIENT_SECRET env var on server" });
+    sendJson(res, 500, { error: "服务端缺少 AUTH_CLIENT_ID 或 AUTH_CLIENT_SECRET 配置", source: "server-config" });
     return;
   }
 
@@ -1236,7 +1579,7 @@ async function handleAuthToken(req, res) {
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
-    sendJson(res, upstreamRes.status, { error: text || upstreamRes.statusText || "Request failed" });
+    sendJson(res, upstreamRes.status, formatUpstreamError("OAuth Token 接口", upstreamRes.status, text));
     return;
   }
 
@@ -1248,10 +1591,17 @@ async function handleAuthToken(req, res) {
   }
 }
 
+/**
+ * 处理 OAuth userinfo 代理接口。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleAuthUserInfo(req, res) {
   const userInfoUrl = getAuthUserInfoUrlBase();
   if (!userInfoUrl) {
-    sendJson(res, 500, { error: "Missing AUTH_SERVER_DOMAIN env var on server" });
+    sendJson(res, 500, { error: "服务端缺少 AUTH_SERVER_DOMAIN 配置", source: "server-config" });
     return;
   }
 
@@ -1284,7 +1634,7 @@ async function handleAuthUserInfo(req, res) {
       parsed = null;
     }
     sendJson(res, upstreamRes.status, {
-      error: text || upstreamRes.statusText || "Request failed",
+      ...formatUpstreamError("OAuth UserInfo 接口", upstreamRes.status, text),
       errorCode,
       data: parsed,
       url: userInfoUrl,
@@ -1301,6 +1651,13 @@ async function handleAuthUserInfo(req, res) {
   }
 }
 
+/**
+ * 处理消息反馈提交接口。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleFeedback(req, res) {
   const body = await readBodyJson(req);
   const messageId = String(body?.messageId || "").trim();
@@ -1318,7 +1675,7 @@ async function handleFeedback(req, res) {
 
   const feedbackUrl = getFeedbackUrl(messageId);
   if (!feedbackUrl) {
-    sendJson(res, 500, { error: "Feedback base URL not configured" });
+    sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
     return;
   }
 
@@ -1331,7 +1688,7 @@ async function handleFeedback(req, res) {
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    sendJson(res, 500, { error: String(err?.message || err) });
+    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
   }
 
@@ -1349,9 +1706,7 @@ async function handleFeedback(req, res) {
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
-    sendJson(res, upstreamRes.status, {
-      error: text || upstreamRes.statusText || "Feedback request failed",
-    });
+    sendJson(res, upstreamRes.status, formatUpstreamError("反馈上游", upstreamRes.status, text));
     return;
   }
 
@@ -1363,6 +1718,14 @@ async function handleFeedback(req, res) {
   }
 }
 
+/**
+ * 处理消息反馈状态查询接口。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @param {string} messageId 外部消息 ID。
+ * @returns {Promise<void>}
+ */
 async function handleFeedbackStatus(req, res, messageId) {
   const trimmedId = String(messageId || "").trim();
   if (!trimmedId) {
@@ -1372,7 +1735,7 @@ async function handleFeedbackStatus(req, res, messageId) {
 
   const feedbackUrl = getFeedbackUrl(trimmedId);
   if (!feedbackUrl) {
-    sendJson(res, 500, { error: "Feedback base URL not configured" });
+    sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
     return;
   }
 
@@ -1380,7 +1743,7 @@ async function handleFeedbackStatus(req, res, messageId) {
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    sendJson(res, 500, { error: String(err?.message || err) });
+    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
   }
 
@@ -1396,9 +1759,7 @@ async function handleFeedbackStatus(req, res, messageId) {
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
-    sendJson(res, upstreamRes.status, {
-      error: text || upstreamRes.statusText || "Feedback status request failed",
-    });
+    sendJson(res, upstreamRes.status, formatUpstreamError("反馈状态上游", upstreamRes.status, text));
     return;
   }
 
@@ -1410,6 +1771,13 @@ async function handleFeedbackStatus(req, res, messageId) {
   }
 }
 
+/**
+ * 处理静态资源访问，默认回退到 H5 前端文件。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @returns {Promise<void>}
+ */
 async function handleStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
   let pathname = decodeURIComponent(url.pathname || "/");
@@ -1440,6 +1808,9 @@ async function handleStatic(req, res) {
   }
 }
 
+/**
+ * HTTP 服务器入口，根据路径分发到各个业务处理函数。
+ */
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url || "/", "http://localhost");
@@ -1530,10 +1901,17 @@ const server = http.createServer(async (req, res) => {
     res.end("Method not allowed");
   } catch (err) {
     const code = err?.statusCode || 500;
-    sendJson(res, code, { error: String(err?.message || err) });
+    sendJson(res, code, {
+      error: formatInternalError(err),
+      source: "server",
+      errorCode: String(err?.code || ""),
+    });
   }
 });
 
+/**
+ * 启动前先补齐数据库结构，再启动 HTTP 服务。
+ */
 ensureSchema()
   .then(() => {
     server.listen(PORT, "0.0.0.0", () => {
