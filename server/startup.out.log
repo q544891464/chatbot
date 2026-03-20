@@ -1,9 +1,0 @@
-Starting proxy on http://0.0.0.0:8787
-LAN IP: 169.254.37.246, 172.17.91.201, 192.168.137.1, 192.168.217.1
-H5 Chatbot proxy listening on http://localhost:8787
-Serving static from D:\Code\chatbot\h5-chatbot
-[Config] Active upstreams: {
-  ALT_API_URL: 'http://183.78.180.103:5050/api/chat/agent/ChatbotAgent',
-  ALT_AUTH_URL: 'http://183.78.180.103:5050/api/auth/token',
-  ALT_THREAD_URL: 'http://183.78.180.103:5050/api/chat/thread'
-}

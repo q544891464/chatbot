@@ -1,6 +1,7 @@
 const http = require("node:http");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const mysql = require("mysql2/promise");
 const { Readable } = require("node:stream");
 
@@ -50,6 +51,47 @@ const pool = mysql.createPool({
 });
 
 const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
+const LOG_DIR = path.resolve(__dirname, "logs");
+const ALT_STREAM_LOG_FILE = path.join(LOG_DIR, "alt-stream.log");
+const SERVER_LOG_FILE = path.join(LOG_DIR, "server.log");
+
+/**
+ * 确保日志目录存在。
+ *
+ * @returns {void}
+ */
+function ensureLogDirSync() {
+  if (!fsSync.existsSync(LOG_DIR)) {
+    fsSync.mkdirSync(LOG_DIR, { recursive: true });
+  }
+}
+
+/**
+ * 以单行文本形式追加服务器日志。
+ *
+ * @param {string} filePath 日志文件路径。
+ * @param {string} line 单行日志内容。
+ * @returns {void}
+ */
+function appendLogLine(filePath, line) {
+  try {
+    ensureLogDirSync();
+    fsSync.appendFileSync(filePath, `${line}\n`, "utf8");
+  } catch {
+    // ignore file logging failures to avoid affecting main flow
+  }
+}
+
+/**
+ * 以 JSON 行格式追加结构化日志。
+ *
+ * @param {string} filePath 日志文件路径。
+ * @param {object} payload 日志对象。
+ * @returns {void}
+ */
+function appendJsonLog(filePath, payload) {
+  appendLogLine(filePath, JSON.stringify(payload));
+}
 
 /**
  * 启动时检查并补齐数据库缺失字段，兼容旧表结构。
@@ -199,6 +241,26 @@ function extractErrorDetail(raw) {
   try {
     const data = JSON.parse(text);
     const detail = data?.error || data?.message || data?.detail || "";
+    if (typeof detail === "string") {
+      return detail.trim();
+    }
+    if (Array.isArray(detail)) {
+      return detail
+        .map((item) => {
+          if (typeof item === "string") return item.trim();
+          if (item && typeof item === "object") {
+            const loc = Array.isArray(item.loc) ? item.loc.join(".") : "";
+            const msg = String(item.msg || item.message || "").trim();
+            return loc && msg ? `${loc}: ${msg}` : msg || JSON.stringify(item);
+          }
+          return String(item || "").trim();
+        })
+        .filter(Boolean)
+        .join("; ");
+    }
+    if (detail && typeof detail === "object") {
+      return JSON.stringify(detail);
+    }
     return String(detail || text).trim();
   } catch {
     return text;
@@ -383,6 +445,35 @@ function getAltThreadUrl() {
     return `${base}/api/chat/thread`;
   }
   return "";
+}
+
+/**
+ * 计算上游历史消息查询接口地址。
+ *
+ * @param {string} agentId 智能体 ID。
+ * @param {string} threadId 会话线程 ID。
+ * @returns {string} 历史消息接口地址。
+ */
+function getAltHistoryUrl(agentId, threadId) {
+  const trimmedThreadId = String(threadId || "").trim();
+  if (!trimmedThreadId) return "";
+  const marker = "/api/chat/agent/";
+  const idx = ALT_API_URL.indexOf(marker);
+  if (idx < 0) return "";
+  const base = ALT_API_URL.slice(0, idx);
+  return `${base}/api/chat/agent/${encodeURIComponent(
+    String(agentId || ALT_AGENT_ID).trim() || ALT_AGENT_ID,
+  )}/history?thread_id=${encodeURIComponent(trimmedThreadId)}`;
+}
+
+/**
+ * 判断消息 ID 是否已经是可直接提交给反馈接口的整数主键。
+ *
+ * @param {string} messageId 消息 ID。
+ * @returns {boolean} 是否为整数 ID。
+ */
+function isIntegerMessageId(messageId) {
+  return /^\d+$/.test(String(messageId || "").trim());
 }
 
 /**
@@ -726,6 +817,153 @@ async function handleConversationsSync(req, res) {
 }
 
 /**
+ * 根据本地消息行 ID 返回消息元信息。
+ *
+ * @param {http.IncomingMessage} req 请求对象。
+ * @param {http.ServerResponse} res 响应对象。
+ * @param {URL} url 已解析的请求 URL。
+ * @returns {Promise<void>}
+ */
+async function handleMessageMeta(req, res, url) {
+  const messageId = Number.parseInt(String(url.searchParams.get("messageId") || ""), 10);
+  if (!Number.isFinite(messageId) || messageId <= 0) {
+    sendJson(res, 400, { error: "Missing messageId" });
+    return;
+  }
+
+  const [rows] = await pool.execute(
+    "SELECT id, role, conversation_id, external_message_id FROM messages WHERE id = ? LIMIT 1",
+    [messageId],
+  );
+  const row = rows?.[0];
+  if (!row) {
+    sendJson(res, 404, { error: "Message not found" });
+    return;
+  }
+
+  sendJson(res, 200, {
+    id: Number(row.id),
+    role: String(row.role || ""),
+    conversationId: Number(row.conversation_id || 0),
+    externalMessageId: row.external_message_id ? String(row.external_message_id) : "",
+  });
+}
+
+/**
+ * 基于本地消息表与上游 history 接口，将流式运行 ID 映射为上游数据库消息主键。
+ *
+ * @param {string} messageId 当前持有的消息 ID，可能为整数或 lc_run-- 字符串。
+ * @param {string} token 上游 Bearer Token。
+ * @param {string} cookieHeader 原始 Cookie 头。
+ * @returns {Promise<string>} 可用于反馈接口的整数消息 ID；若无法映射则返回原值。
+ */
+async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
+  const trimmedId = String(messageId || "").trim();
+  if (!trimmedId) return "";
+  if (isIntegerMessageId(trimmedId)) return trimmedId;
+
+  const [rows] = await pool.execute(
+    `SELECT m.id AS local_message_id, c.dify_conversation_id AS thread_id
+     FROM messages m
+     JOIN conversations c ON c.id = m.conversation_id
+     WHERE m.external_message_id = ?
+     ORDER BY m.id DESC
+     LIMIT 1`,
+    [trimmedId],
+  );
+  const row = rows?.[0];
+  const threadId = String(row?.thread_id || "").trim();
+  if (!threadId) {
+    appendJsonLog(SERVER_LOG_FILE, {
+      ts: new Date().toISOString(),
+      event: "feedback:map:miss-local-thread",
+      externalMessageId: trimmedId,
+    });
+    return trimmedId;
+  }
+
+  const historyUrl = getAltHistoryUrl(ALT_AGENT_ID, threadId);
+  if (!historyUrl) {
+    appendJsonLog(SERVER_LOG_FILE, {
+      ts: new Date().toISOString(),
+      event: "feedback:map:miss-history-url",
+      externalMessageId: trimmedId,
+      threadId,
+    });
+    return trimmedId;
+  }
+
+  const upstreamRes = await safeFetch(
+    historyUrl,
+    {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
+    },
+    "ALT history service",
+  );
+
+  const text = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    appendJsonLog(SERVER_LOG_FILE, {
+      ts: new Date().toISOString(),
+      event: "feedback:map:history-error",
+      externalMessageId: trimmedId,
+      threadId,
+      historyUrl,
+      status: upstreamRes.status,
+      responseText: text,
+    });
+    return trimmedId;
+  }
+
+  let data = {};
+  try {
+    data = JSON.parse(text || "{}");
+  } catch {
+    appendJsonLog(SERVER_LOG_FILE, {
+      ts: new Date().toISOString(),
+      event: "feedback:map:history-invalid-json",
+      externalMessageId: trimmedId,
+      threadId,
+      historyUrl,
+      responseText: text,
+    });
+    return trimmedId;
+  }
+
+  const history = Array.isArray(data?.history) ? data.history : [];
+  const matched = history.find((item) => {
+    const extraId = String(item?.extra_metadata?.id || "").trim();
+    return extraId && extraId === trimmedId;
+  });
+  const resolvedId = String(matched?.id || "").trim();
+  if (resolvedId && isIntegerMessageId(resolvedId)) {
+    appendJsonLog(SERVER_LOG_FILE, {
+      ts: new Date().toISOString(),
+      event: "feedback:map:resolved",
+      externalMessageId: trimmedId,
+      resolvedMessageId: resolvedId,
+      threadId,
+      localMessageId: Number(row?.local_message_id || 0),
+    });
+    return resolvedId;
+  }
+
+  appendJsonLog(SERVER_LOG_FILE, {
+    ts: new Date().toISOString(),
+    event: "feedback:map:not-found",
+    externalMessageId: trimmedId,
+    threadId,
+    historyCount: history.length,
+  });
+  return trimmedId;
+}
+
+/**
  * 从上游聊天响应对象中提取最终答案文本。
  *
  * @param {object|string} data 上游响应对象或字符串。
@@ -829,14 +1067,94 @@ function logAltRawPayload(payload) {
 function extractAltMessageId(payload) {
   if (!payload || typeof payload !== "object") return "";
   const metadata = payload.metadata || payload.meta || {};
+  const msg = payload.msg || {};
+  const msgMetadata = msg.metadata || {};
   const raw =
     metadata.message_id ??
     metadata.messageId ??
     metadata.messageID ??
     payload.message_id ??
-    payload.messageId;
+    payload.messageId ??
+    msg.message_id ??
+    msg.messageId ??
+    msg.id ??
+    msgMetadata.message_id ??
+    msgMetadata.messageId ??
+    msgMetadata.messageID;
   if (raw === undefined || raw === null || raw === "") return "";
   return String(raw);
+}
+
+/**
+ * 为流式请求生成简短诊断 ID，便于串联一次完整会话。
+ *
+ * @returns {string} 请求诊断 ID。
+ */
+function createAltStreamDiagId() {
+  return `alt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * 安全提取对象的键名列表，避免日志中输出过大对象。
+ *
+ * @param {unknown} value 待检查值。
+ * @returns {string[]} 键名数组。
+ */
+function listObjectKeys(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+  return Object.keys(value);
+}
+
+/**
+ * 输出流式 message_id 诊断日志，只记录结构和关键字段。
+ *
+ * @param {string} requestId 本次流式请求 ID。
+ * @param {string} stage 日志阶段。
+ * @param {object} detail 附加字段。
+ * @returns {void}
+ */
+function logAltStreamDiag(requestId, stage, detail = {}) {
+  const entry = {
+    ts: new Date().toISOString(),
+    requestId,
+    stage,
+    detail,
+  };
+  // eslint-disable-next-line no-console
+  console.log(`[ALT STREAM][${requestId}] ${stage}`, detail);
+  appendJsonLog(ALT_STREAM_LOG_FILE, entry);
+}
+
+/**
+ * 汇总上游单个流事件中与 message_id 相关的字段形态。
+ *
+ * @param {object} payload 上游事件负载。
+ * @returns {object} 精简后的诊断信息。
+ */
+function summarizeAltPayloadForDiag(payload) {
+  const metadata = payload?.metadata || payload?.meta || {};
+  const msg = payload?.msg || {};
+  const msgMetadata = msg?.metadata || {};
+  return {
+    payloadKeys: listObjectKeys(payload),
+    metadataKeys: listObjectKeys(metadata),
+    msgKeys: listObjectKeys(msg),
+    msgMetadataKeys: listObjectKeys(msgMetadata),
+    extractedMessageId: extractAltMessageId(payload) || "",
+    candidates: {
+      metadata_message_id: metadata?.message_id ?? null,
+      metadata_messageId: metadata?.messageId ?? null,
+      metadata_messageID: metadata?.messageID ?? null,
+      payload_message_id: payload?.message_id ?? null,
+      payload_messageId: payload?.messageId ?? null,
+      msg_message_id: msg?.message_id ?? null,
+      msg_messageId: msg?.messageId ?? null,
+      msg_id: msg?.id ?? null,
+      msgMetadata_message_id: msgMetadata?.message_id ?? null,
+      msgMetadata_messageId: msgMetadata?.messageId ?? null,
+      msgMetadata_messageID: msgMetadata?.messageID ?? null,
+    },
+  };
 }
 
 /**
@@ -1286,10 +1604,14 @@ async function handleAltChatStream(req, res) {
     sendJson(res, 500, { error: "服务端缺少 ALT_API_URL 配置", source: "server-config" });
     return;
   }
+  const requestId = createAltStreamDiagId();
   let token = "";
   try {
     token = await getAltAuthToken();
   } catch (err) {
+    logAltStreamDiag(requestId, "auth:error", {
+      error: String(err?.message || err || ""),
+    });
     sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
   }
@@ -1300,6 +1622,13 @@ async function handleAltChatStream(req, res) {
     config: typeof body?.config === "object" && body?.config ? body.config : {},
     meta: typeof body?.meta === "object" && body?.meta ? body.meta : {},
   };
+  logAltStreamDiag(requestId, "request:start", {
+    threadId: String(payload?.config?.thread_id || payload?.config?.threadId || ""),
+    queryLength: payload.query.length,
+    queryPreview: payload.query.slice(0, 80),
+    configKeys: listObjectKeys(payload.config),
+    metaKeys: listObjectKeys(payload.meta),
+  });
 
   const controller = new AbortController();
   req.on("close", () => controller.abort());
@@ -1314,9 +1643,18 @@ async function handleAltChatStream(req, res) {
     body: JSON.stringify(payload),
     signal: controller.signal,
   }, "ALT chat service");
+  logAltStreamDiag(requestId, "request:response", {
+    status: upstreamRes.status,
+    contentType: upstreamRes.headers.get("content-type") || "",
+    hasBody: Boolean(upstreamRes.body),
+  });
 
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
+    logAltStreamDiag(requestId, "request:error", {
+      status: upstreamRes.status,
+      bodyPreview: txt.slice(0, 300),
+    });
     sendJson(res, upstreamRes.status, formatUpstreamError("聊天上游", upstreamRes.status, txt));
     return;
   }
@@ -1341,6 +1679,7 @@ async function handleAltChatStream(req, res) {
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   const state = {
+    requestId,
     streamedText: "",
     rawStreamedText: "",
     lastChunk: "",
@@ -1367,6 +1706,7 @@ async function handleAltChatStream(req, res) {
       try {
         const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
         logAltRawPayload(payloadObj);
+        logAltStreamDiag(requestId, "event:payload", summarizeAltPayloadForDiag(payloadObj));
         state.lastPayload = payloadObj;
         const externalMessageId = extractAltMessageId(payloadObj);
         if (externalMessageId) {
@@ -1413,6 +1753,7 @@ async function handleAltChatStream(req, res) {
     try {
       const payloadObj = JSON.parse(buffer.startsWith("data:") ? buffer.slice(5).trim() : buffer);
       logAltRawPayload(payloadObj);
+      logAltStreamDiag(requestId, "event:payload:tail", summarizeAltPayloadForDiag(payloadObj));
       state.lastPayload = payloadObj;
       const externalMessageId = extractAltMessageId(payloadObj);
       if (externalMessageId) {
@@ -1453,6 +1794,16 @@ async function handleAltChatStream(req, res) {
       // ignore
     }
   }
+
+  logAltStreamDiag(requestId, state.externalMessageId ? "stream:end" : "stream:end:no-message-id", {
+    externalMessageId: state.externalMessageId || "",
+    streamedLength: state.streamedText.length,
+    rawStreamedLength: state.rawStreamedText.length,
+    finalTextLength: state.finalText.length,
+    metaSent: state.metaSent,
+    errorSent: state.errorSent,
+    lastPayload: state.lastPayload ? summarizeAltPayloadForDiag(state.lastPayload) : null,
+  });
 
   if (!state.errorSent && !state.streamedText && !state.finalText && state.lastPayload) {
     const fallback = extractAltAnswer(state.lastPayload);
@@ -1661,11 +2012,11 @@ async function handleAuthUserInfo(req, res) {
  */
 async function handleFeedback(req, res) {
   const body = await readBodyJson(req);
-  const messageId = String(body?.messageId || "").trim();
+  const originalMessageId = String(body?.messageId || "").trim();
   const rating = String(body?.rating || "").trim();
   const reason = String(body?.reason || "");
 
-  if (!messageId) {
+  if (!originalMessageId) {
     sendJson(res, 400, { error: "Missing messageId" });
     return;
   }
@@ -1674,16 +2025,10 @@ async function handleFeedback(req, res) {
     return;
   }
 
-  const feedbackUrl = getFeedbackUrl(messageId);
-  if (!feedbackUrl) {
-    sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
-    return;
-  }
-
-  const payload = { rating };
-  if (rating === "dislike") {
-    payload.reason = reason;
-  }
+  const payload = {
+    rating,
+    reason: rating === "dislike" ? (reason || null) : null,
+  };
 
   let token = "";
   try {
@@ -1694,6 +2039,12 @@ async function handleFeedback(req, res) {
   }
 
   const cookieHeader = String(req.headers.cookie || "");
+  const messageId = await resolveFeedbackMessageId(originalMessageId, token, cookieHeader);
+  const feedbackUrl = getFeedbackUrl(messageId);
+  if (!feedbackUrl) {
+    sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
+    return;
+  }
   const upstreamRes = await fetch(feedbackUrl, {
     method: "POST",
     headers: {
@@ -1707,6 +2058,17 @@ async function handleFeedback(req, res) {
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
+    appendJsonLog(SERVER_LOG_FILE, {
+      ts: new Date().toISOString(),
+      event: "feedback:error",
+      feedbackUrl,
+      status: upstreamRes.status,
+      messageId,
+      originalMessageId,
+      rating,
+      payload,
+      responseText: text,
+    });
     sendJson(res, upstreamRes.status, formatUpstreamError("反馈上游", upstreamRes.status, text));
     return;
   }
@@ -1728,15 +2090,9 @@ async function handleFeedback(req, res) {
  * @returns {Promise<void>}
  */
 async function handleFeedbackStatus(req, res, messageId) {
-  const trimmedId = String(messageId || "").trim();
-  if (!trimmedId) {
+  const originalMessageId = String(messageId || "").trim();
+  if (!originalMessageId) {
     sendJson(res, 400, { error: "Missing messageId" });
-    return;
-  }
-
-  const feedbackUrl = getFeedbackUrl(trimmedId);
-  if (!feedbackUrl) {
-    sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
     return;
   }
 
@@ -1749,6 +2105,12 @@ async function handleFeedbackStatus(req, res, messageId) {
   }
 
   const cookieHeader = String(req.headers.cookie || "");
+  const trimmedId = await resolveFeedbackMessageId(originalMessageId, token, cookieHeader);
+  const feedbackUrl = getFeedbackUrl(trimmedId);
+  if (!feedbackUrl) {
+    sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
+    return;
+  }
   const upstreamRes = await fetch(feedbackUrl, {
     method: "GET",
     headers: {
@@ -1868,6 +2230,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/message-meta") {
+      await handleMessageMeta(req, res, url);
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/conversations/sync") {
       await handleConversationsSync(req, res);
       return;
@@ -1916,15 +2283,23 @@ const server = http.createServer(async (req, res) => {
 ensureSchema()
   .then(() => {
     server.listen(PORT, "0.0.0.0", () => {
+      const activeUpstreams = {
+        ALT_API_URL,
+        ALT_AUTH_URL,
+        ALT_THREAD_URL: getAltThreadUrl(),
+      };
       // eslint-disable-next-line no-console
       console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);
       // eslint-disable-next-line no-console
       console.log(`Serving static from ${PUBLIC_DIR}`);
       // eslint-disable-next-line no-console
-      console.log("[Config] Active upstreams:", {
-        ALT_API_URL,
-        ALT_AUTH_URL,
-        ALT_THREAD_URL: getAltThreadUrl(),
+      console.log("[Config] Active upstreams:", activeUpstreams);
+      appendJsonLog(SERVER_LOG_FILE, {
+        ts: new Date().toISOString(),
+        event: "server:start",
+        port: PORT,
+        publicDir: PUBLIC_DIR,
+        activeUpstreams,
       });
     });
   })

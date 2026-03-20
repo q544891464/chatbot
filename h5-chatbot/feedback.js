@@ -22,6 +22,23 @@ export function getFeedbackUrl(getStoreBase, feedbackEndpointPath) {
 }
 
 /**
+ * 根据本地消息行 ID 回源查询外部消息 ID。
+ *
+ * @param {Function} getStoreBase 返回代理 API Base URL 的函数。
+ * @param {object} message 当前消息对象。
+ * @returns {Promise<string>} 查询到的外部消息 ID。
+ */
+export async function fetchExternalMessageId(getStoreBase, message) {
+  const messageId = Number.parseInt(String(message?.id || ""), 10);
+  if (!Number.isFinite(messageId) || messageId <= 0) return "";
+  const url = `${getStoreBase()}/message-meta?messageId=${encodeURIComponent(messageId)}`;
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) return "";
+  const data = await res.json().catch(() => ({}));
+  return String(data?.externalMessageId || "").trim();
+}
+
+/**
  * 确保消息已经拥有可用于反馈的外部消息 ID。
  *
  * @param {object} message 当前消息对象。
@@ -29,10 +46,20 @@ export function getFeedbackUrl(getStoreBase, feedbackEndpointPath) {
  * @param {object} payload 同步会话时使用的负载。
  * @returns {Promise<string>} 外部消息 ID。
  */
-export async function ensureFeedbackId(message, syncConversationsToServer, payload) {
+export async function ensureFeedbackId(message, syncConversationsToServer, payload, getStoreBase) {
   if (message?.externalMessageId) return message.externalMessageId;
   try {
     await syncConversationsToServer(payload);
+  } catch {
+    // ignore
+  }
+  if (message?.externalMessageId) return message.externalMessageId;
+  try {
+    const externalMessageId = await fetchExternalMessageId(getStoreBase, message);
+    if (externalMessageId) {
+      message.externalMessageId = externalMessageId;
+      return externalMessageId;
+    }
   } catch {
     // ignore
   }
@@ -54,7 +81,12 @@ export async function sendFeedback(ctx, message, rating, reason) {
     activeId: ctx.state.activeId,
     items: ctx.state.conversations.map(ctx.serializeConversation),
   };
-  const id = await ensureFeedbackId(message, syncConversationsToServer, payload);
+  const id = await ensureFeedbackId(
+    message,
+    syncConversationsToServer,
+    payload,
+    getStoreBase,
+  );
   if (!id) {
     throw new Error("提交反馈失败：未获取到外部消息 ID，请先确认消息已成功落库");
   }
@@ -94,7 +126,12 @@ export async function fetchFeedbackStatus(ctx, message) {
     activeId: ctx.state.activeId,
     items: ctx.state.conversations.map(ctx.serializeConversation),
   };
-  const id = await ensureFeedbackId(message, syncConversationsToServer, payload);
+  const id = await ensureFeedbackId(
+    message,
+    syncConversationsToServer,
+    payload,
+    getStoreBase,
+  );
   if (!id) return null;
   const url = `${getFeedbackUrl(getStoreBase, feedbackEndpointPath)}?messageId=${encodeURIComponent(id)}`;
   const res = await fetch(url, { method: "GET" });
