@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 返回当前时间的时分字符串，用于消息时间展示。
  *
  * @returns {string} 形如 HH:mm 的时间文本。
@@ -53,7 +53,7 @@ export async function readResponseError(res, fallback = "请求失败") {
 }
 
 /**
- * 规范化运行时异常，尽量转成对排障更友好的中文提示。
+ * 规范化运行时异常，尽量转换成对排障更友好的中文提示。
  *
  * @param {*} err 捕获到的错误对象。
  * @param {string} fallback 默认错误标题。
@@ -62,6 +62,9 @@ export async function readResponseError(res, fallback = "请求失败") {
 export function formatRuntimeError(err, fallback = "请求失败") {
   const message = String(err?.message || err || "").trim();
   if (!message) return fallback;
+  if (/Load failed/i.test(message)) {
+    return `${fallback}：请求未成功发出，请检查 API Base URL、网络、反向代理、CORS 或 HTTPS/HTTP 混合内容配置`;
+  }
   if (/Failed to fetch|fetch failed|NetworkError/i.test(message)) {
     return `${fallback}：无法连接到服务，请检查代理地址、网络或 CORS 配置`;
   }

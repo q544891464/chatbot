@@ -168,7 +168,7 @@ cp server/.env.example server/.env
 
 初始化脚本：
 
-- [init.sql](/d:/Code/chatbot/server/sql/init.sql)
+- [init.sql](server/sql/init.sql)
 
 执行方式：
 
@@ -229,7 +229,7 @@ chmod +x server/start.sh
 npm start
 ```
 
-但推荐优先使用 [start.sh](/d:/Code/chatbot/server/start.sh) 或 [start.ps1](/d:/Code/chatbot/server/start.ps1)，因为它们会自动加载 `server/.env` 和根目录 `.env`。
+但推荐优先使用 [start.sh](server/start.sh) 或 [start.ps1](server/start.ps1)，因为它们会自动加载 `server/.env` 和根目录 `.env`。
 
 ### 5. 验证启动
 
@@ -312,7 +312,7 @@ http://<服务器IP>:8787/
 
 Linux 启动脚本：
 
-- [start.sh](/d:/Code/chatbot/server/start.sh)
+- [start.sh](server/start.sh)
 
 脚本作用：
 
@@ -348,7 +348,7 @@ nohup ./server/start.sh >> server/logs/server-console.log 2>&1 &
 
 仓库内已提供服务文件：
 
-- [chatbot.service](/d:/Code/chatbot/deploy/chatbot.service)
+- [chatbot.service](deploy/chatbot.service)
 
 ### 1. 确认启动脚本可执行
 
@@ -402,7 +402,7 @@ WantedBy=multi-user.target
 - `WorkingDirectory`
   - 项目根目录
 - `ExecStart`
-  - 实际启动命令，指向 [start.sh](/d:/Code/chatbot/server/start.sh)
+  - 实际启动命令，指向 [start.sh](server/start.sh)
 - `Restart=always`
   - 进程异常退出后自动拉起
 - `RestartSec=3`
@@ -410,7 +410,7 @@ WantedBy=multi-user.target
 - `After=network.target`
   - 先等待网络就绪后再启动
 
-如果你的 MySQL 是 Docker 容器部署，通常不要在这里依赖 `mysql.service`。保留 `After=network.target` 即可；真正关键的是 [server/.env](/d:/Code/chatbot/server/.env) 里的 `DB_HOST` / `DB_PORT` 要能从宿主机访问到容器 MySQL。
+如果你的 MySQL 是 Docker 容器部署，通常不要在这里依赖 `mysql.service`。保留 `After=network.target` 即可；真正关键的是 [server/.env](server/.env) 里的 `DB_HOST` / `DB_PORT` 要能从宿主机访问到容器 MySQL。
 
 ### 3. 让 systemd 生效
 
@@ -467,8 +467,8 @@ cd /home/chatbot/chatbot
 
 Linux 同步脚本：
 
-- [sync-from-github.sh](/d:/Code/chatbot/scripts/sync-from-github.sh)
-- [sync-from-github.env.example](/d:/Code/chatbot/scripts/sync-from-github.env.example)
+- [sync-from-github.sh](scripts/sync-from-github.sh)
+- [sync-from-github.env.example](scripts/sync-from-github.env.example)
 
 功能：
 
@@ -580,7 +580,7 @@ curl http://127.0.0.1:8787/api/health
 
 - 端口 `8787` 是否监听
 - `API Base URL` 是否正确
-- 是否真的用 [start.sh](/d:/Code/chatbot/server/start.sh) 或 [start.ps1](/d:/Code/chatbot/server/start.ps1) 启动了服务
+- 是否真的用 [start.sh](server/start.sh) 或 [start.ps1](server/start.ps1) 启动了服务
 
 ### 2. 页面能打开，但聊天失败
 
@@ -605,7 +605,7 @@ curl http://127.0.0.1:8787/api/health
 优先检查：
 
 - MySQL 是否可连接
-- 是否执行了 [init.sql](/d:/Code/chatbot/server/sql/init.sql)
+- 是否执行了 [init.sql](server/sql/init.sql)
 - `messages` 表是否包含 `external_message_id`
 
 ### 5. 反馈失败
@@ -614,8 +614,8 @@ curl http://127.0.0.1:8787/api/health
 
 - `FEEDBACK_BASE_URL`
 - 上游认证是否正常
-- [server/logs](/d:/Code/chatbot/server/logs) 下当天的 `server-YYYY-MM-DD.log` 里的 `feedback:error`
-- [server/logs](/d:/Code/chatbot/server/logs) 下当天的 `alt-stream-YYYY-MM-DD.log` 是否拿到了流式消息 ID
+- [server/logs](server/logs) 下当天的 `server-YYYY-MM-DD.log` 里的 `feedback:error`
+- [server/logs](server/logs) 下当天的 `alt-stream-YYYY-MM-DD.log` 是否拿到了流式消息 ID
 
 ### 6. 服务器同步脚本失败
 
