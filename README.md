@@ -75,7 +75,7 @@
 │  ├─ data/
 │  └─ logs/
 │     ├─ server-YYYY-MM-DD.log
-│     └─ alt-stream-YYYY-MM-DD.log
+│     └─ message-YYYY-MM-DD.log
 ├─ scripts/
 │  ├─ sync-from-github.sh
 │  └─ sync-from-github.env.example
@@ -561,8 +561,8 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 
 - `server-YYYY-MM-DD.log`
   - 服务启动、反馈错误、反馈 ID 映射日志
-- `alt-stream-YYYY-MM-DD.log`
-  - 上游流式事件、消息 ID 提取、流结束诊断日志
+- `message-YYYY-MM-DD.log`
+  - 聊天消息摘要日志，按消息记录线程、外部消息 ID、回答长度和简短预览
 - `server-console.log`
   - `nohup` 方式启动时的标准输出与标准错误
 
@@ -615,7 +615,7 @@ curl http://127.0.0.1:8787/api/health
 - `FEEDBACK_BASE_URL`
 - 上游认证是否正常
 - [server/logs](server/logs) 下当天的 `server-YYYY-MM-DD.log` 里的 `feedback:error`
-- [server/logs](server/logs) 下当天的 `alt-stream-YYYY-MM-DD.log` 是否拿到了流式消息 ID
+- [server/logs](server/logs) 下当天的 `message-YYYY-MM-DD.log` 是否记录了外部消息 ID 与回答摘要
 
 ### 6. 服务器同步脚本失败
 

@@ -52,7 +52,7 @@ const pool = mysql.createPool({
 
 const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
 const LOG_DIR = path.resolve(__dirname, "logs");
-const ALT_STREAM_LOG_PREFIX = "alt-stream";
+const MESSAGE_LOG_PREFIX = "message";
 const SERVER_LOG_PREFIX = "server";
 
 /**
@@ -1120,54 +1120,41 @@ function listObjectKeys(value) {
 }
 
 /**
- * 输出流式 message_id 诊断日志，只记录结构和关键字段。
+ * 记录单次聊天消息的精简摘要日志。
  *
  * @param {string} requestId 本次流式请求 ID。
- * @param {string} stage 日志阶段。
+ * @param {string} status 消息处理状态。
  * @param {object} detail 附加字段。
  * @returns {void}
  */
-function logAltStreamDiag(requestId, stage, detail = {}) {
+function logMessageSummary(requestId, status, detail = {}) {
   const entry = {
     ts: new Date().toISOString(),
     requestId,
-    stage,
+    status,
     detail,
   };
-  // eslint-disable-next-line no-console
-  console.log(`[ALT STREAM][${requestId}] ${stage}`, detail);
-  appendJsonLog(ALT_STREAM_LOG_PREFIX, entry);
+  appendJsonLog(MESSAGE_LOG_PREFIX, entry);
 }
 
 /**
- * 汇总上游单个流事件中与 message_id 相关的字段形态。
+ * 汇总最终消息日志里需要保留的上游关键信息。
  *
  * @param {object} payload 上游事件负载。
- * @returns {object} 精简后的诊断信息。
+ * @returns {object|null} 精简后的消息信息。
  */
-function summarizeAltPayloadForDiag(payload) {
+function summarizeAltPayloadForMessage(payload) {
+  if (!payload || typeof payload !== "object") return null;
   const metadata = payload?.metadata || payload?.meta || {};
   const msg = payload?.msg || {};
-  const msgMetadata = msg?.metadata || {};
   return {
     payloadKeys: listObjectKeys(payload),
-    metadataKeys: listObjectKeys(metadata),
-    msgKeys: listObjectKeys(msg),
-    msgMetadataKeys: listObjectKeys(msgMetadata),
+    msgType: String(msg?.type || ""),
+    role: String(msg?.role || ""),
+    status: String(payload?.status || ""),
     extractedMessageId: extractAltMessageId(payload) || "",
-    candidates: {
-      metadata_message_id: metadata?.message_id ?? null,
-      metadata_messageId: metadata?.messageId ?? null,
-      metadata_messageID: metadata?.messageID ?? null,
-      payload_message_id: payload?.message_id ?? null,
-      payload_messageId: payload?.messageId ?? null,
-      msg_message_id: msg?.message_id ?? null,
-      msg_messageId: msg?.messageId ?? null,
-      msg_id: msg?.id ?? null,
-      msgMetadata_message_id: msgMetadata?.message_id ?? null,
-      msgMetadata_messageId: msgMetadata?.messageId ?? null,
-      msgMetadata_messageID: msgMetadata?.messageID ?? null,
-    },
+    msgId: msg?.id ?? msg?.message_id ?? msg?.messageId ?? null,
+    metadataKeys: listObjectKeys(metadata),
   };
 }
 
@@ -1623,7 +1610,7 @@ async function handleAltChatStream(req, res) {
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    logAltStreamDiag(requestId, "auth:error", {
+    logMessageSummary(requestId, "auth-error", {
       error: String(err?.message || err || ""),
     });
     sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
@@ -1636,13 +1623,7 @@ async function handleAltChatStream(req, res) {
     config: typeof body?.config === "object" && body?.config ? body.config : {},
     meta: typeof body?.meta === "object" && body?.meta ? body.meta : {},
   };
-  logAltStreamDiag(requestId, "request:start", {
-    threadId: String(payload?.config?.thread_id || payload?.config?.threadId || ""),
-    queryLength: payload.query.length,
-    queryPreview: payload.query.slice(0, 80),
-    configKeys: listObjectKeys(payload.config),
-    metaKeys: listObjectKeys(payload.meta),
-  });
+  const threadIdForLog = String(payload?.config?.thread_id || payload?.config?.threadId || "");
 
   const controller = new AbortController();
   req.on("close", () => controller.abort());
@@ -1657,15 +1638,11 @@ async function handleAltChatStream(req, res) {
     body: JSON.stringify(payload),
     signal: controller.signal,
   }, "ALT chat service");
-  logAltStreamDiag(requestId, "request:response", {
-    status: upstreamRes.status,
-    contentType: upstreamRes.headers.get("content-type") || "",
-    hasBody: Boolean(upstreamRes.body),
-  });
-
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
-    logAltStreamDiag(requestId, "request:error", {
+    logMessageSummary(requestId, "upstream-error", {
+      threadId: threadIdForLog,
+      queryLength: payload.query.length,
       status: upstreamRes.status,
       bodyPreview: txt.slice(0, 300),
     });
@@ -1720,7 +1697,6 @@ async function handleAltChatStream(req, res) {
       try {
         const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
         logAltRawPayload(payloadObj);
-        logAltStreamDiag(requestId, "event:payload", summarizeAltPayloadForDiag(payloadObj));
         state.lastPayload = payloadObj;
         const externalMessageId = extractAltMessageId(payloadObj);
         if (externalMessageId) {
@@ -1767,7 +1743,6 @@ async function handleAltChatStream(req, res) {
     try {
       const payloadObj = JSON.parse(buffer.startsWith("data:") ? buffer.slice(5).trim() : buffer);
       logAltRawPayload(payloadObj);
-      logAltStreamDiag(requestId, "event:payload:tail", summarizeAltPayloadForDiag(payloadObj));
       state.lastPayload = payloadObj;
       const externalMessageId = extractAltMessageId(payloadObj);
       if (externalMessageId) {
@@ -1809,16 +1784,6 @@ async function handleAltChatStream(req, res) {
     }
   }
 
-  logAltStreamDiag(requestId, state.externalMessageId ? "stream:end" : "stream:end:no-message-id", {
-    externalMessageId: state.externalMessageId || "",
-    streamedLength: state.streamedText.length,
-    rawStreamedLength: state.rawStreamedText.length,
-    finalTextLength: state.finalText.length,
-    metaSent: state.metaSent,
-    errorSent: state.errorSent,
-    lastPayload: state.lastPayload ? summarizeAltPayloadForDiag(state.lastPayload) : null,
-  });
-
   if (!state.errorSent && !state.streamedText && !state.finalText && state.lastPayload) {
     const fallback = extractAltAnswer(state.lastPayload);
     if (fallback) state.finalText = fallback;
@@ -1838,6 +1803,22 @@ async function handleAltChatStream(req, res) {
       `data: ${JSON.stringify({ event: "message", answer: fallback })}\n\n`,
     );
   }
+
+  const finalAnswerForLog = state.streamedText || state.finalText || "";
+  logMessageSummary(
+    requestId,
+    state.errorSent ? "error" : state.externalMessageId ? "done" : "done-no-message-id",
+    {
+      threadId: threadIdForLog,
+      queryLength: payload.query.length,
+      externalMessageId: state.externalMessageId || "",
+      answerLength: finalAnswerForLog.length,
+      answerPreview: finalAnswerForLog.slice(0, 160),
+      metaSent: state.metaSent,
+      errorSent: state.errorSent,
+      lastPayload: summarizeAltPayloadForMessage(state.lastPayload),
+    },
+  );
 
   res.write(`data: ${JSON.stringify({ event: "message_end" })}\n\n`);
   res.write("data: [DONE]\n\n");
