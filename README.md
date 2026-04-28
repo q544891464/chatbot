@@ -12,6 +12,8 @@
 ## 功能概览
 
 - ChatbotAgent 流式聊天
+- ai-wiki 知识库检索进度提示
+- 上游空回答兜底提示
 - OAuth 登录与用户信息获取
 - MySQL 会话持久化
 - 点赞 / 点踩反馈
@@ -45,9 +47,11 @@
 2. 前端调用 `/api/alt-thread` 创建或复用线程。
 3. 前端调用 `/api/alt-chat-stream` 发起流式聊天。
 4. Node 代理把请求转发到上游 ChatbotAgent。
-5. 前端实时展示回答，并通过 `/api/conversations/sync` 把会话写回 MySQL。
-6. 用户点赞 / 点踩时，前端调用 `/api/feedback`，Node 再转发到上游反馈服务。
-7. OAuth 登录通过 `/api/auth-config`、`/api/auth-token`、`/api/auth-userinfo` 完成。
+5. Node 代理把 ai-wiki 的知识库 / 工具事件转换为前端可展示的进度提示。
+6. 前端实时展示进度和回答，并通过 `/api/conversations/sync` 把会话写回 MySQL。
+7. 如果上游结束但没有返回可展示文本，Node 和前端都会给出兜底提示，避免空白回复。
+8. 用户点赞 / 点踩时，前端调用 `/api/feedback`，Node 再转发到上游反馈服务。
+9. OAuth 登录通过 `/api/auth-config`、`/api/auth-token`、`/api/auth-userinfo` 完成。
 
 ## 目录结构
 
@@ -537,6 +541,27 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 - 点踩需要填写原因
 - 当前代理会自动把流式 `lc_run--...` 映射成上游反馈接口需要的整数消息 ID
 
+### 流式进度提示
+
+`/api/alt-chat-stream` 会把 ai-wiki 返回的中间事件转换为安全的前端进度提示。当前主要识别：
+
+- `list_kbs`：正在获取可用知识库
+- `query_kb`：正在检索指定知识库，并尽量展示知识库名与关键词
+- `get_mindmap`：正在读取知识库结构
+- `agent_state`：正在同步检索状态
+
+这些进度只用于改善等待体验，不展示完整工具结果，也不展示模型内部推理链。
+
+### 空回答兜底
+
+如果上游返回 `finished` 但没有可展示内容，或者流式响应结束时没有任何文本，后端会返回统一兜底文案：
+
+```text
+抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。
+```
+
+前端也会在最终内容为空时做同样兜底，避免用户看到空白气泡。
+
 ## 后端接口概览
 
 | 方法 | 路径 | 说明 |
@@ -550,10 +575,21 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 | `GET` | `/api/message-meta` | 查询本地消息元信息 |
 | `POST` | `/api/alt-thread` | 创建线程 |
 | `POST` | `/api/alt-chat` | 阻塞式聊天 |
-| `POST` | `/api/alt-chat-stream` | 流式聊天 |
+| `POST` | `/api/alt-chat-stream` | 流式聊天，包含回答分片、消息元信息与检索进度事件 |
 | `POST` | `/api/feedback` | 提交反馈 |
 | `GET` | `/api/feedback?messageId=...` | 查询反馈状态 |
 | `POST` | `/api/chat-messages` | Dify 代理接口 |
+
+### `/api/alt-chat-stream` 事件
+
+Node 代理对前端输出 SSE：
+
+- `event: "message"`：回答正文分片
+- `event: "meta"`：外部消息 ID
+- `event: "progress"`：等待阶段提示，例如正在检索哪个知识库
+- `event: "message_end"`：本轮输出结束
+
+前端只把 `message` 写入最终会话内容；`progress` 只在生成中显示，回复结束后会自动清除。
 
 ## 日志说明
 
@@ -591,7 +627,18 @@ curl http://127.0.0.1:8787/api/health
 - `ALT_AUTH_URL`
 - 上游网络是否可达
 
-### 3. OAuth 登录失败
+### 3. 聊天时一直停留在“正在思考”
+
+优先检查：
+
+- 浏览器控制台是否持续收到 `/api/alt-chat-stream` 数据
+- [server/logs](server/logs) 下当天的 `message-YYYY-MM-DD.log` 是否记录本轮请求
+- ai-wiki 是否返回 `list_kbs`、`query_kb`、`get_mindmap` 等工具事件
+- `ALT_API_URL` 是否指向 ai-wiki 的 `/api/chat/agent/{agent_id}` 接口
+
+如果 ai-wiki 有工具事件，前端会显示类似“正在检索知识库「xxx」”的提示；如果上游最终没有正文，前端会显示空回答兜底文案。
+
+### 4. OAuth 登录失败
 
 优先检查：
 
@@ -600,7 +647,7 @@ curl http://127.0.0.1:8787/api/health
 - `AUTH_CLIENT_SECRET`
 - `AUTH_REDIRECT_URI`
 
-### 4. 看不到历史会话
+### 5. 看不到历史会话
 
 优先检查：
 
@@ -608,7 +655,7 @@ curl http://127.0.0.1:8787/api/health
 - 是否执行了 [init.sql](server/sql/init.sql)
 - `messages` 表是否包含 `external_message_id`
 
-### 5. 反馈失败
+### 6. 反馈失败
 
 优先检查：
 
@@ -617,7 +664,7 @@ curl http://127.0.0.1:8787/api/health
 - [server/logs](server/logs) 下当天的 `server-YYYY-MM-DD.log` 里的 `feedback:error`
 - [server/logs](server/logs) 下当天的 `message-YYYY-MM-DD.log` 是否记录了外部消息 ID 与回答摘要
 
-### 6. 服务器同步脚本失败
+### 7. 服务器同步脚本失败
 
 常见原因：
 
