@@ -39,6 +39,7 @@ const STORAGE_KEY = "h5ChatbotConfig:v1";
 const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
 const AGENT_ID = "ChatbotAgent";
 const FEEDBACK_ENDPOINT_PATH = "/feedback";
+const EMPTY_ASSISTANT_FALLBACK = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
 const DEFAULT_USER_META = {
   userName: "test",
   org: "org1",
@@ -657,6 +658,15 @@ function normalizeAssistantContentForDisplay(content) {
   return String(content || "")
     .replace(/^(?:\uFEFF)?(?:[ \t]*\r?\n)+/, "");
 }
+
+function escapeHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
 /**
  * 按角色与状态更新消息气泡内容。
  *
@@ -669,7 +679,8 @@ function setBubbleContent(bubble, role, content, status) {
   if (role === "assistant") {
     bubble.classList.add("md");
     const isTyping = status === "typing";
-    const thinkingHtml = `      <div class="md-typing md-typing--block" aria-live="polite">        <span class="md-typing__text">正在思考</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>      </div>    `;
+    const progressText = bubble.dataset.progress || "正在思考";
+    const thinkingHtml = `      <div class="md-typing md-typing--block" aria-live="polite">        <span class="md-typing__text">${escapeHtml(progressText)}</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>      </div>    `;
     if (!content) {
       bubble.innerHTML = isTyping ? thinkingHtml : "";
       return;
@@ -1135,6 +1146,17 @@ async function sendMessage() {
           saveConversations();
         }
       },
+      onProgress: (progress) => {
+        assistantNode.bubble.dataset.progress = String(progress || "");
+        setBubbleContent(
+          assistantNode.bubble,
+          "assistant",
+          assistantMsg.content,
+          assistantMsg.status,
+        );
+        if (autoScroll) scrollToBottom(el.messages);
+        updateScrollButton();
+      },
       onDelta: (chunk) => {
         assistantMsg.content += chunk;
         setBubbleContent(
@@ -1147,7 +1169,12 @@ async function sendMessage() {
         updateScrollButton();
       },
     });
+    if (!String(assistantMsg.content || "").trim()) {
+      assistantMsg.content = EMPTY_ASSISTANT_FALLBACK;
+      setTips("上游未返回可展示内容，已显示兜底提示。");
+    }
     assistantMsg.status = "done";
+    delete assistantNode.bubble.dataset.progress;
     assistantNode.meta.querySelector(".msg__spinner")?.remove();
     setBubbleContent(
       assistantNode.bubble,
@@ -1178,6 +1205,7 @@ async function sendMessage() {
     if (err?.name === "AbortError") {
       assistantMsg.status = "done";
       assistantMsg.content = assistantMsg.content || "（已停止）";
+      delete assistantNode.bubble.dataset.progress;
       setBubbleContent(
         assistantNode.bubble,
         "assistant",
@@ -1199,6 +1227,7 @@ async function sendMessage() {
       assistantMsg.status = "error";
       assistantMsg.content =
         assistantMsg.content || `出错：${String(err?.message || err)}`;
+      delete assistantNode.bubble.dataset.progress;
       setBubbleContent(
         assistantNode.bubble,
         "assistant",

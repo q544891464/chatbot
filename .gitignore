@@ -1,6 +1,9 @@
 .env
+env
 node_modules/
 .DS_Store
 server/data/
 server/logs/
 .codex_tmp/
+chatbot-server-*.log
+response_*.json

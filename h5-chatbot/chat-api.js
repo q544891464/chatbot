@@ -127,7 +127,7 @@ export async function agentChat(ctx, { query, signal, threadId }) {
  * @param {Function} onMeta 元信息回调。
  * @param {{sawChunk: boolean}} state 流式读取状态。
  */
-function dispatchStreamEvent(dataRaw, eventName, onDelta, onMeta, state) {
+function dispatchStreamEvent(dataRaw, eventName, onDelta, onMeta, onProgress, state) {
   const payloadText = String(dataRaw || "").trim();
   if (!payloadText || payloadText === "[DONE]") {
     logSse(state.requestId, "event:skip", {
@@ -153,6 +153,14 @@ function dispatchStreamEvent(dataRaw, eventName, onDelta, onMeta, state) {
       logSse(state.requestId, "event:meta", {
         messageId: messageId !== undefined && messageId !== null ? String(messageId) : "",
       });
+      return;
+    }
+    if (event === "progress") {
+      const progress = String(data.message || data.status || "").trim();
+      if (progress) {
+        onProgress?.(progress);
+        logSse(state.requestId, "event:progress", { progress });
+      }
       return;
     }
 
@@ -220,7 +228,7 @@ function dispatchStreamEvent(dataRaw, eventName, onDelta, onMeta, state) {
  */
 export async function agentChatStream(
   ctx,
-  { query, signal, onDelta, onMeta, threadId },
+  { query, signal, onDelta, onMeta, onProgress, threadId },
 ) {
   const { getStoreBase } = ctx;
   const url = `${getStoreBase()}/alt-chat-stream`;
@@ -278,7 +286,7 @@ export async function agentChatStream(
       textChars: text.length,
       preview: previewText(text),
     });
-    dispatchStreamEvent(text, "", onDelta, onMeta, state);
+    dispatchStreamEvent(text, "", onDelta, onMeta, onProgress, state);
     logSse(requestId, "request:end", {
       mode: "text",
       sawChunk: state.sawChunk,
@@ -296,6 +304,7 @@ export async function agentChatStream(
         String(event.event || ""),
         onDelta,
         onMeta,
+        onProgress,
         state,
       );
     },

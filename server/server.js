@@ -54,6 +54,7 @@ const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
 const LOG_DIR = path.resolve(__dirname, "logs");
 const MESSAGE_LOG_PREFIX = "message";
 const SERVER_LOG_PREFIX = "server";
+const EMPTY_ALT_ANSWER = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
 
 /**
  * 确保日志目录存在。
@@ -1014,9 +1015,7 @@ function extractAltAnswer(data) {
       if (cleaned.trim()) return cleaned;
     }
   }
-  if (String(data.status || "") === "finished") {
-    return "（模型未返回内容）";
-  }
+  if (String(data.status || "") === "finished") return EMPTY_ALT_ANSWER;
   return "";
 }
 
@@ -1288,6 +1287,77 @@ function hasToolPayload(payload) {
   return false;
 }
 
+function parseToolArgs(rawArgs) {
+  if (!rawArgs) return {};
+  if (typeof rawArgs === "object") return rawArgs;
+  if (typeof rawArgs !== "string") return {};
+  try {
+    return JSON.parse(rawArgs);
+  } catch {
+    return {};
+  }
+}
+
+function collectAltToolCalls(payload) {
+  const msg = payload?.msg || {};
+  const groups = [
+    msg.tool_calls,
+    payload.tool_calls,
+    msg.tool_call_chunks,
+    payload.tool_call_chunks,
+    msg.invalid_tool_calls,
+    payload.invalid_tool_calls,
+    msg.additional_kwargs?.tool_calls,
+  ];
+  return groups.flatMap((group) => (Array.isArray(group) ? group : []));
+}
+
+function formatAltToolProgress(name, args = {}, completed = false) {
+  const toolName = String(name || "").trim();
+  const kbName = String(args.kb_name || args.kbName || "").trim();
+  const queryText = String(args.query_text || args.query || "").trim();
+  const suffix = queryText ? `，关键词：${queryText.slice(0, 40)}` : "";
+  if (toolName === "list_kbs") return completed ? "已获取可用知识库，正在选择检索范围" : "正在获取可用知识库";
+  if (toolName === "query_kb") {
+    if (completed) return "已完成知识库检索，正在整理答案";
+    return kbName ? `正在检索知识库「${kbName}」${suffix}` : `正在检索知识库${suffix}`;
+  }
+  if (toolName === "get_mindmap") {
+    if (completed) return "已读取知识库结构，正在整理检索思路";
+    return kbName ? `正在读取知识库「${kbName}」的结构` : "正在读取知识库结构";
+  }
+  if (toolName) return completed ? "工具调用完成，正在整理答案" : `正在调用工具：${toolName}`;
+  return "";
+}
+
+function extractAltProgress(payload) {
+  if (!payload || typeof payload !== "object") return "";
+  const status = String(payload.status || "");
+  if (status === "init") return "正在准备问题上下文";
+  if (status === "agent_state") return "正在同步检索状态";
+
+  const msg = payload.msg || {};
+  if (String(msg.type || "").toLowerCase() === "tool" || String(msg.role || "") === "tool") {
+    return formatAltToolProgress(msg.name || msg.tool, {}, true);
+  }
+
+  for (const call of collectAltToolCalls(payload)) {
+    const name = call?.name || call?.function?.name || call?.tool || "";
+    const args = parseToolArgs(call?.args ?? call?.arguments ?? call?.function?.arguments);
+    const progress = formatAltToolProgress(name, args, false);
+    if (progress) return progress;
+  }
+
+  return "";
+}
+
+function writeAltProgress(res, state, payload) {
+  const progress = extractAltProgress(payload);
+  if (!progress || progress === state.lastProgress) return;
+  state.lastProgress = progress;
+  res.write(`data: ${JSON.stringify({ event: "progress", message: progress })}\n\n`);
+}
+
 /**
  * 处理新增流式分片，并返回真正需要输出给前端的增量文本。
  *
@@ -1522,8 +1592,9 @@ async function handleAltChat(req, res) {
   }
 
   const result = await readAltResponse(upstreamRes);
+  const answer = String(result.answer || "").trim() ? result.answer : EMPTY_ALT_ANSWER;
   sendJson(res, 200, {
-    answer: result.answer || "",
+    answer,
     raw: result.raw || null,
     externalMessageId: result.externalMessageId || "",
   });
@@ -1681,6 +1752,7 @@ async function handleAltChatStream(req, res) {
     metaSent: false,
     finalText: "",
     lastPayload: null,
+    lastProgress: "",
   };
 
   while (true) {
@@ -1698,6 +1770,7 @@ async function handleAltChatStream(req, res) {
         const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
         logAltRawPayload(payloadObj);
         state.lastPayload = payloadObj;
+        writeAltProgress(res, state, payloadObj);
         const externalMessageId = extractAltMessageId(payloadObj);
         if (externalMessageId) {
           state.externalMessageId = externalMessageId;
@@ -1744,6 +1817,7 @@ async function handleAltChatStream(req, res) {
       const payloadObj = JSON.parse(buffer.startsWith("data:") ? buffer.slice(5).trim() : buffer);
       logAltRawPayload(payloadObj);
       state.lastPayload = payloadObj;
+      writeAltProgress(res, state, payloadObj);
       const externalMessageId = extractAltMessageId(payloadObj);
       if (externalMessageId) {
         state.externalMessageId = externalMessageId;
@@ -1802,12 +1876,23 @@ async function handleAltChatStream(req, res) {
     res.write(
       `data: ${JSON.stringify({ event: "message", answer: fallback })}\n\n`,
     );
+  } else if (!state.errorSent && !state.streamedText) {
+    state.finalText = EMPTY_ALT_ANSWER;
+    res.write(
+      `data: ${JSON.stringify({ event: "message", answer: state.finalText })}\n\n`,
+    );
   }
 
   const finalAnswerForLog = state.streamedText || state.finalText || "";
   logMessageSummary(
     requestId,
-    state.errorSent ? "error" : state.externalMessageId ? "done" : "done-no-message-id",
+    state.errorSent
+      ? "error"
+      : finalAnswerForLog === EMPTY_ALT_ANSWER
+        ? "empty-fallback"
+        : state.externalMessageId
+          ? "done"
+          : "done-no-message-id",
     {
       threadId: threadIdForLog,
       queryLength: payload.query.length,
