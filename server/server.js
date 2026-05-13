@@ -55,6 +55,7 @@ const LOG_DIR = path.resolve(__dirname, "logs");
 const MESSAGE_LOG_PREFIX = "message";
 const SERVER_LOG_PREFIX = "server";
 const EMPTY_ALT_ANSWER = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
+const ALT_RATE_LIMIT_ANSWER = "当前模型请求过于频繁或上下文过长，已触发上游限流。请稍后重试，或新建对话/缩短问题后再试。";
 
 /**
  * 确保日志目录存在。
@@ -289,6 +290,7 @@ function extractErrorDetail(raw) {
  * @returns {string} 中文错误分类。
  */
 function formatStatusLabel(status) {
+  if (status === 429) return "请求过于频繁";
   if (status === 400) return "请求参数错误";
   if (status === 401) return "认证失败";
   if (status === 403) return "无权限访问";
@@ -309,8 +311,22 @@ function formatStatusLabel(status) {
  * @param {object} extra 额外字段。
  * @returns {object} 标准化错误对象。
  */
+function isAltRateLimitError(text, status = 0) {
+  const raw = String(text || "");
+  if (status === 429) return true;
+  return /USER_TPM_RATELIMITING|RateLimitError|TPM\s*超限|tokens?\s*后重试|too many requests|rate limit/i.test(raw);
+}
+
 function formatUpstreamError(source, status, raw, extra = {}) {
   const detail = extractErrorDetail(raw);
+  if (isAltRateLimitError(`${detail}\n${raw}`, status)) {
+    return {
+      error: ALT_RATE_LIMIT_ANSWER,
+      source,
+      status,
+      ...extra,
+    };
+  }
   const base = `${source}${formatStatusLabel(status)}（HTTP ${status}）`;
   return {
     error: detail ? `${base}：${detail}` : base,
@@ -985,7 +1001,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
  * @returns {string} 提取到的答案文本。
  */
 function extractAltAnswer(data) {
-  if (typeof data === "string") return data;
+  if (typeof data === "string") return isAltRateLimitError(data) ? ALT_RATE_LIMIT_ANSWER : data;
   if (!data || typeof data !== "object") return "";
   const errorText = extractAltError(data);
   if (errorText) return errorText;
@@ -1012,6 +1028,7 @@ function extractAltAnswer(data) {
   for (const item of candidates) {
     if (typeof item === "string" && item.trim()) {
       const cleaned = filterAltText({ toolBlock: false, toolDump: false }, item);
+      if (isAltRateLimitError(cleaned)) return ALT_RATE_LIMIT_ANSWER;
       if (cleaned.trim()) return cleaned;
     }
   }
@@ -1037,6 +1054,9 @@ function extractAltError(data) {
     data.msg?.error ||
     data.error?.message ||
     data.error?.msg;
+  if (isAltRateLimitError(msg, Number(data.status_code || data.code || data.error?.code || 0))) {
+    return ALT_RATE_LIMIT_ANSWER;
+  }
   return typeof msg === "string" ? msg.trim() : "";
 }
 
@@ -1629,6 +1649,7 @@ function extractAltChunk(payload) {
   const response = typeof payload.response === "string" ? payload.response : "";
   if (payload.response === null && msgContent === "") return null;
   const raw = msgContent !== "" ? msgContent : response !== "" ? response : "";
+  if (isAltRateLimitError(raw)) return ALT_RATE_LIMIT_ANSWER;
   if (raw !== "") return raw;
   return null;
 }

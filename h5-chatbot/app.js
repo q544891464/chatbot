@@ -37,6 +37,7 @@ import {
 import { agentChatStream, createAgentThread } from "./chat-api.js";
 const STORAGE_KEY = "h5ChatbotConfig:v1";
 const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
+const LOCAL_CONVERSATION_KEY = "h5ChatbotConversations:v1";
 const AGENT_ID = "ChatbotAgent";
 const FEEDBACK_ENDPOINT_PATH = "/feedback";
 const EMPTY_ASSISTANT_FALLBACK = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
@@ -129,6 +130,35 @@ function saveConfig(cfg) {
     }),
   );
 } // Choose a stable identifier for server-side conversation storage.
+
+function getLocalConversationKey(userId = state.config.userId) {
+  return `${LOCAL_CONVERSATION_KEY}:${String(userId || "anonymous")}`;
+}
+
+function saveConversationsToLocal(payload) {
+  try {
+    localStorage.setItem(getLocalConversationKey(), JSON.stringify(payload));
+  } catch {
+    // ignore local cache failures
+  }
+}
+
+function loadConversationsFromLocal() {
+  const data = safeJsonParse(
+    localStorage.getItem(getLocalConversationKey()) || "null",
+    null,
+  );
+  const items = Array.isArray(data?.items)
+    ? data.items.map(normalizeConversation)
+    : [];
+  const preferredId = String(data?.activeId || "");
+  return {
+    items,
+    activeId: items.some((c) => c.id === preferredId)
+      ? preferredId
+      : items[0]?.id || "",
+  };
+}
 
 /**
  * 归一化单个会话对象，保证字段齐全且消息数量受限。
@@ -277,12 +307,14 @@ function saveConversations() {
     activeId: state.activeId,
     items: state.conversations.map(serializeConversation),
   };
+  saveConversationsToLocal(payload);
   syncConversationsToServer(payload).catch((err) => {
     const detail = String(err?.message || err || "").trim();
     setTips(detail ? `会话同步失败：${detail}` : "会话同步失败，请检查服务是否启动。");
   });
 }
 const initialConfig = loadConfig();
+saveConfig(initialConfig);
 const initialConversation = createConversation({ platform: "agent" });
 const DEFAULT_QUESTION_BANK = [
   "干部问责管理",
@@ -346,9 +378,23 @@ async function initConversations() {
       renderAll();
       updateConversationList();
       updateScrollButton();
+      saveConversationsToLocal({
+        activeId: state.activeId,
+        items: state.conversations.map(serializeConversation),
+      });
+      return;
     }
   } catch (err) {
-    setTips(`会话存储不可用，当前切换为本地临时模式：${formatRuntimeError(err, "加载会话失败")}`);
+    setTips(`会话存储不可用，已读取本地缓存：${formatRuntimeError(err, "加载会话失败")}`);
+  }
+  const cached = loadConversationsFromLocal();
+  if (cached.items.length) {
+    state.conversations = cached.items;
+    state.activeId = cached.activeId || cached.items[0].id;
+    sortConversations();
+    renderAll();
+    updateConversationList();
+    updateScrollButton();
   }
   const legacy = safeJsonParse(
     localStorage.getItem(LEGACY_CHAT_KEY) || "null",
@@ -667,6 +713,19 @@ function escapeHtml(text) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+const ACTION_ICONS = {
+  copy: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M8 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1"/></svg>',
+  like: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.2 20H5a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3h2.1l3.1-5.5A2.3 2.3 0 0 1 14.5 5v4h3.2a3.3 3.3 0 0 1 3.2 4l-1 4.2a3.6 3.6 0 0 1-3.5 2.8H8.2ZM8 11H5a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h3v-7Zm2 7h6.4a1.6 1.6 0 0 0 1.6-1.2l1-4.2A1.3 1.3 0 0 0 17.7 11H13a1 1 0 0 1-1-1V5.5a.3.3 0 0 0-.6-.2L10 7.8V18Z"/></svg>',
+  dislike: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path fill="currentColor" d="M15.8 4H19a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3h-2.1l-3.1 5.5A2.3 2.3 0 0 1 9.5 19v-4H6.3a3.3 3.3 0 0 1-3.2-4l1-4.2A3.6 3.6 0 0 1 7.6 4h8.2ZM16 13h3a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3v7Zm-2-7H7.6A1.6 1.6 0 0 0 6 7.2l-1 4.2A1.3 1.3 0 0 0 6.3 13H11a1 1 0 0 1 1 1v4.5a.3.3 0 0 0 .6.2l1.4-2.5V6Z"/></svg>',
+};
+
+function setActionIcon(button, iconName, label) {
+  button.classList.add("msg__action--icon");
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.innerHTML = ACTION_ICONS[iconName] || "";
+}
 /**
  * 按角色与状态更新消息气泡内容。
  *
@@ -726,7 +785,7 @@ function createMessageNode(message) {
   const copyBtn = document.createElement("button");
   copyBtn.type = "button";
   copyBtn.className = "msg__action";
-  copyBtn.textContent = "复制";
+  setActionIcon(copyBtn, "copy", "复制");
   copyBtn.addEventListener("click", async () => {
     const ok = await copyToClipboard(bubble.textContent || "");
     setTips(ok ? "已复制" : "复制失败");
@@ -737,7 +796,7 @@ function createMessageNode(message) {
     const likeBtn = document.createElement("button");
     likeBtn.type = "button";
     likeBtn.className = "msg__action";
-    likeBtn.textContent = "点赞";
+    setActionIcon(likeBtn, "like", "点赞");
     likeBtn.setAttribute("data-feedback", "like");
     likeBtn.addEventListener("click", async () => {
       if (message.feedback) return;
@@ -758,7 +817,7 @@ function createMessageNode(message) {
     const dislikeBtn = document.createElement("button");
     dislikeBtn.type = "button";
     dislikeBtn.className = "msg__action";
-    dislikeBtn.textContent = "点踩";
+    setActionIcon(dislikeBtn, "dislike", "点踩");
     dislikeBtn.setAttribute("data-feedback", "dislike");
     dislikeBtn.addEventListener("click", async () => {
       if (message.feedback) return;
@@ -868,6 +927,32 @@ function closeSettings() {
  */
 function toggleDevSettingsButton(visible) {
   document.body.classList.toggle("dev-settings-visible", Boolean(visible));
+}
+
+const devToolsBaseline = {
+  widthGap: Math.abs(window.outerWidth - window.innerWidth),
+  heightGap: Math.abs(window.outerHeight - window.innerHeight),
+};
+/**
+ * 在浏览器开发者工具打开时显示调试设置入口。
+ */
+function updateDevSettingsVisibility() {
+  const threshold = 140;
+  const widthGap = Math.abs(window.outerWidth - window.innerWidth);
+  const heightGap = Math.abs(window.outerHeight - window.innerHeight);
+  const widthDelta = widthGap - devToolsBaseline.widthGap;
+  const heightDelta = heightGap - devToolsBaseline.heightGap;
+  if (widthDelta > threshold || heightDelta > threshold) {
+    toggleDevSettingsButton(true);
+  }
+}
+
+function isDevToolsShortcut(e) {
+  const key = String(e.key || "").toLowerCase();
+  return (
+    key === "f12" ||
+    (e.ctrlKey && e.shiftKey && ["i", "j", "c"].includes(key))
+  );
 }
 /**
  * 根据输入内容动态调整文本域高度。
@@ -1367,6 +1452,9 @@ el.feedbackInput?.addEventListener("input", () => {
   resetFeedbackHint(el, "请简要说明原因，便于改进。", false);
 });
 document.addEventListener("keydown", (e) => {
+  if (isDevToolsShortcut(e)) {
+    toggleDevSettingsButton(true);
+  }
   if (e.key === "Escape") {
     closeSettings();
     closeChatList();
@@ -1377,8 +1465,11 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     updateScrollButton();
+    updateDevSettingsVisibility();
   }
 });
+window.addEventListener("resize", updateDevSettingsVisibility, { passive: true });
+setInterval(updateDevSettingsVisibility, 1000);
 el.settingsForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const cfg = {
