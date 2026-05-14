@@ -109,6 +109,13 @@ function appendJsonLog(prefix, payload) {
   appendLogLine(getDailyLogFilePath(prefix), JSON.stringify(payload));
 }
 
+function appendAuthUserInfoLog(payload) {
+  appendJsonLog(SERVER_LOG_PREFIX, {
+    ts: new Date().toISOString(),
+    ...payload,
+  });
+}
+
 /**
  * 启动时检查并补齐数据库缺失字段，兼容旧表结构。
  *
@@ -2086,6 +2093,14 @@ async function handleAuthUserInfo(req, res) {
     } catch {
       parsed = null;
     }
+    appendAuthUserInfoLog({
+      event: "auth:userinfo:error",
+      url: userInfoUrl,
+      status: upstreamRes.status,
+      errorCode,
+      data: parsed,
+      raw: parsed ? undefined : text,
+    });
     sendJson(res, upstreamRes.status, {
       ...formatUpstreamError("OAuth UserInfo 接口", upstreamRes.status, text),
       errorCode,
@@ -2098,8 +2113,20 @@ async function handleAuthUserInfo(req, res) {
 
   try {
     const data = JSON.parse(text || "{}");
+    appendAuthUserInfoLog({
+      event: "auth:userinfo:success",
+      url: userInfoUrl,
+      status: upstreamRes.status,
+      data,
+    });
     sendJson(res, 200, data);
   } catch {
+    appendAuthUserInfoLog({
+      event: "auth:userinfo:raw",
+      url: userInfoUrl,
+      status: upstreamRes.status,
+      raw: text,
+    });
     sendJson(res, 200, { raw: text });
   }
 }
