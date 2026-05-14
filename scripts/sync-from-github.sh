@@ -2,6 +2,26 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+ENV_FILE="${SYNC_ENV_FILE:-${SCRIPT_DIR}/sync-from-github.env}"
+if [[ -f "${ENV_FILE}" ]]; then
+  printf '[sync] loading config: %s\n' "${ENV_FILE}"
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    line="${line//$'\r'/}"
+    line="${line#$'\xef\xbb\xbf'}"
+    [[ -z "${line}" || "${line}" =~ ^[[:space:]]*# ]] && continue
+    [[ "${line}" == *"="* ]] || continue
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key//[[:space:]]/}"
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    if [[ "${value}" =~ ^\".*\"$ || "${value}" =~ ^\'.*\'$ ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+    export "${key}=${value}"
+  done <"${ENV_FILE}"
+fi
+
 APP_DIR="${APP_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 REMOTE_NAME="${REMOTE_NAME:-origin}"
 TARGET_BRANCH="${1:-${TARGET_BRANCH:-}}"

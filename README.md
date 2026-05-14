@@ -488,11 +488,7 @@ Linux 同步脚本：
 ```bash
 cd /home/chatbot/chatbot
 cp scripts/sync-from-github.env.example scripts/sync-from-github.env
-chmod +x scripts/sync-from-github.sh
-set -a
-source scripts/sync-from-github.env
-set +a
-./scripts/sync-from-github.sh
+bash scripts/sync-from-github.sh
 ```
 
 推荐配置：
