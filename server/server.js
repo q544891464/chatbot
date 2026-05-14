@@ -2131,6 +2131,16 @@ async function handleAuthUserInfo(req, res) {
   }
 }
 
+async function handleAuthUserInfoClientLog(req, res) {
+  const body = await readBodyJson(req);
+  appendAuthUserInfoLog({
+    event: "auth:userinfo:client",
+    source: String(body.source || "client"),
+    data: body.userInfo || body.data || {},
+  });
+  sendJson(res, 200, { ok: true });
+}
+
 /**
  * 处理消息反馈提交接口。
  *
@@ -2339,6 +2349,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/auth-userinfo") {        
       await handleAuthUserInfo(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth-userinfo-log") {
+      await handleAuthUserInfoClientLog(req, res);
       return;
     }
 

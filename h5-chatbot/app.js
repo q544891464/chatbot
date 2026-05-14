@@ -214,6 +214,17 @@ function getStoreBase() {
   if (isProxyBaseUrl(b)) return b;
   return getDefaultProxyBaseUrl();
 }
+
+function logAuthUserInfo(source, userInfo) {
+  if (!userInfo || typeof userInfo !== "object") return;
+  fetch(`${getStoreBase()}/auth-userinfo-log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, userInfo }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 /**
  * 从后端会话存储服务拉取当前用户的会话列表。
  *
@@ -351,6 +362,7 @@ async function initPlatformUser() {
   try {
     const userInfo = await getLoginUserInfo();
     state.platformUser = userInfo || null;
+    logAuthUserInfo("platform-bridge", userInfo);
     const userId = pickPlatformUserId(userInfo);
     if (!userId) return false;
     if (userId !== state.config.userId) {
@@ -1087,6 +1099,7 @@ function applyUserInfoFromResponse(userInfo) {
   const phone = String(userInfo?.phone_number || "").trim();
   const org = String(userInfo?.orgName || "").trim();
   state.platformUser = { userName: name, phone, org, raw: userInfo || {} };
+  logAuthUserInfo("oauth-userinfo", userInfo);
   updateUserInfoDisplay();
   if (phone) {
     state.config.userId = phone;
