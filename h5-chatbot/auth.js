@@ -240,7 +240,7 @@ export async function startAuthFlow(ctx) {
  * @param {object} ctx 认证上下文。
  * @returns {boolean} 当前地址中是否包含授权码。
  */
-export function captureAuthCodeFromUrl(ctx) {
+export async function captureAuthCodeFromUrl(ctx) {
   const { state, getStoreBase, setTips, onUserInfo } = ctx;
   const params = new URLSearchParams(window.location.search || "");
   const code = params.get("code");
@@ -263,45 +263,40 @@ export function captureAuthCodeFromUrl(ctx) {
   };
   const cleanUrl = `${window.location.pathname}${window.location.hash || ""}`;
   window.history.replaceState({}, "", cleanUrl);
-  fetchAuthConfig(getStoreBase)
-    .then((cfg) => String(cfg?.redirectUri || "").trim())
-    .then((redirectUri) => exchangeAuthToken(getStoreBase, code, redirectUri))
-    .then((data) => {
-      const accessToken = String(data?.access_token || "");
-      const refreshToken = String(data?.refresh_token || "");
-      state.auth = {
-        ...state.auth,
-        accessToken,
-        refreshToken,
-        tokenType: String(data?.token_type || ""),
-        expiresIn: Number(data?.expires_in || 0),
-        receivedAt: Date.now(),
-      };
-      saveAuthState(state.auth);
-      updateAuthDisplay(ctx);
-      if (!accessToken) {
-        throw new Error("换取 Token 失败：响应中缺少 access_token");
-      }
-      return fetchAuthUserInfo(getStoreBase, accessToken).then((result) => {
-        if (!result.ok) {
-          throw new Error(`userinfo:${String(result.message || "获取用户信息失败")}`);
-        }
-        return result.data || {};
-      });
-    })
-    .then((userInfo) => {
-      onUserInfo?.(userInfo);
-    })
-    .catch((err) => {
-      const message = String(err?.message || err);
-      if (message.startsWith("userinfo:")) {
-        setTips?.(`获取用户信息失败：${message.slice("userinfo:".length)}`);
-      } else {
-        setTips?.(`换取 Token 失败：${message}`);
-      }
-      updateAuthDisplay(ctx);
-    });
   saveAuthState(state.auth);
   updateAuthDisplay(ctx);
+  try {
+    const cfg = await fetchAuthConfig(getStoreBase);
+    const redirectUri = String(cfg?.redirectUri || "").trim();
+    const data = await exchangeAuthToken(getStoreBase, code, redirectUri);
+    const accessToken = String(data?.access_token || "");
+    const refreshToken = String(data?.refresh_token || "");
+    state.auth = {
+      ...state.auth,
+      accessToken,
+      refreshToken,
+      tokenType: String(data?.token_type || ""),
+      expiresIn: Number(data?.expires_in || 0),
+      receivedAt: Date.now(),
+    };
+    saveAuthState(state.auth);
+    updateAuthDisplay(ctx);
+    if (!accessToken) {
+      throw new Error("换取 Token 失败：响应中缺少 access_token");
+    }
+    const result = await fetchAuthUserInfo(getStoreBase, accessToken);
+    if (!result.ok) {
+      throw new Error(`userinfo:${String(result.message || "获取用户信息失败")}`);
+    }
+    onUserInfo?.(result.data || {});
+  } catch (err) {
+    const message = String(err?.message || err);
+    if (message.startsWith("userinfo:")) {
+      setTips?.(`获取用户信息失败：${message.slice("userinfo:".length)}`);
+    } else {
+      setTips?.(`换取 Token 失败：${message}`);
+    }
+    updateAuthDisplay(ctx);
+  }
   return true;
 }

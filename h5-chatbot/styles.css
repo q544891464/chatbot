@@ -1371,6 +1371,26 @@ body{
 .btn.ghost{
   background: #f8fafc;
 }
+.empty--locked .empty__card{
+  border-color: #f1c9c9;
+  background: #fffafa;
+}
+.empty--locked .empty__icon--locked{
+  background: #fff1f1;
+  border-color: #f1c9c9;
+  color: #b42318;
+  font-size: 30px;
+  font-weight: 900;
+  box-shadow: none;
+}
+body.access-denied .composer__box{
+  border-color: #ead4d4;
+  background: #faf5f5;
+}
+body.access-denied .composer__send{
+  background: #d0d5dd;
+  color: #ffffff;
+}
 
 @media (min-width: 860px){
   .app{

@@ -137,6 +137,7 @@ export function pickPlatformUserId(userInfo) {
   if (!userInfo || typeof userInfo !== "object") return "";
   const candidates = [
     userInfo.phone,
+    userInfo.phone_number,
     userInfo.mobile,
     userInfo.userId,
     userInfo.useId,

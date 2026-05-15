@@ -225,6 +225,30 @@ function logAuthUserInfo(source, userInfo) {
   }).catch(() => {});
 }
 
+function hasAuthenticatedUserInfo() {
+  const info = state.platformUser;
+  if (!info || typeof info !== "object") return false;
+  if (pickPlatformUserId(info)) return true;
+  const raw = info.raw && typeof info.raw === "object" ? info.raw : null;
+  if (raw && pickPlatformUserId(raw)) return true;
+  return Boolean(
+    String(info.userName || info.name || "").trim() ||
+    String(info.org || info.orgName || "").trim(),
+  );
+}
+
+function setAccessDenied(denied) {
+  state.accessDenied = Boolean(denied);
+  document.body.classList.toggle("access-denied", state.accessDenied);
+  el.input.disabled = state.accessDenied;
+  el.sendBtn.disabled = state.accessDenied || Boolean(state.inFlight);
+  el.newChatBtn.disabled = state.accessDenied;
+  el.chatListBtn.disabled = state.accessDenied;
+  el.input.placeholder = state.accessDenied
+    ? "未获取到登录用户信息"
+    : "询问任何问题";
+}
+
 /**
  * 从后端会话存储服务拉取当前用户的会话列表。
  *
@@ -340,6 +364,7 @@ const state = {
   activeId: initialConversation.id,
   inFlight: null,
   platformUser: null,
+  accessDenied: false,
   auth: loadAuthState(),
   questionBank: DEFAULT_QUESTION_BANK.slice(),
   promptSelection: { pending: false, value: "" },
@@ -643,6 +668,27 @@ function createEmptyStateNode() {
   wrap.appendChild(card);
   return { wrap };
 }
+
+function createAccessDeniedNode() {
+  const wrap = document.createElement("section");
+  wrap.className = "empty empty--locked";
+  const card = document.createElement("div");
+  card.className = "empty__card";
+  const icon = document.createElement("div");
+  icon.className = "empty__icon empty__icon--locked";
+  icon.textContent = "!";
+  const title = document.createElement("div");
+  title.className = "empty__title";
+  title.textContent = "无法访问";
+  const sub = document.createElement("div");
+  sub.className = "empty__sub";
+  sub.textContent = "未获取到登录用户信息，请从已登录的工作平台入口进入。";
+  card.appendChild(icon);
+  card.appendChild(title);
+  card.appendChild(sub);
+  wrap.appendChild(card);
+  return { wrap };
+}
 /**
  * 将推荐问题填入输入框，并记录本次输入来源于推荐项。
  *
@@ -898,6 +944,11 @@ function createMessageNode(message) {
  */
 function renderAll() {
   el.messages.innerHTML = "";
+  if (state.accessDenied) {
+    el.messages.appendChild(createAccessDeniedNode().wrap);
+    updateScrollButton();
+    return;
+  }
   const conv = getActiveConversation();
   if (!conv.messages.length) {
     el.messages.appendChild(createEmptyStateNode().wrap);
@@ -1062,7 +1113,7 @@ function getUserMeta() {
   const org = String(
     info.org || info.departmentName || info.orgName || "",
   ).trim();
-  const phone = String(info.phone || info.mobile || "").trim();
+  const phone = String(info.phone || info.phone_number || info.mobile || "").trim();
   return {
     userName: userName || DEFAULT_USER_META.userName,
     org: org || DEFAULT_USER_META.org,
@@ -1081,7 +1132,7 @@ function updateUserInfoDisplay() {
   const orgRaw = String(
     info.org || info.departmentName || info.orgName || "",
   ).trim();
-  const phoneRaw = String(info.phone || info.mobile || "").trim();
+  const phoneRaw = String(info.phone || info.phone_number || info.mobile || "").trim();
   const nameText = nameRaw || `${DEFAULT_USER_META.userName}（默认）`;
   const orgText = orgRaw || `${DEFAULT_USER_META.org}（默认）`;
   const phoneText = phoneRaw || `${DEFAULT_USER_META.phone}（默认）`;
@@ -1153,7 +1204,7 @@ function getChatApiCtx() {
  * @param {boolean} busy 当前是否处于请求中。
  */
 function setBusy(busy) {
-  el.sendBtn.disabled = busy;
+  el.sendBtn.disabled = busy || state.accessDenied;
   el.stopBtn.hidden = !busy;
 }
 /**
@@ -1169,6 +1220,10 @@ function updateScrollButton() {
  * @returns {Promise<void>}
  */
 async function sendMessage() {
+  if (state.accessDenied) {
+    setTips("未获取到登录用户信息，无法访问。");
+    return;
+  }
   if (state.inFlight) return;
   const text = String(el.input.value || "").trim();
   if (!text) return;
@@ -1370,6 +1425,7 @@ function stopGeneration() {
  * @param {object} options 重置选项。
  */
 function resetConversation(options) {
+  if (state.accessDenied) return;
   const silent = Boolean(options?.silent);
   const conv = getActiveConversation();
   conv.conversationId = "";
@@ -1385,6 +1441,7 @@ function resetConversation(options) {
  * 清空当前会话消息并保留会话对象。
  */
 function clearChat() {
+  if (state.accessDenied) return;
   const conv = getActiveConversation();
   conv.messages = [];
   conv.conversationId = "";
@@ -1413,6 +1470,7 @@ function clearChatWithConfirm() {
  * 新建一个空白会话并切换到该会话。
  */
 function newChat() {
+  if (state.accessDenied) return;
   const conv = createConversation({ platform: "agent" });
   state.conversations.unshift(conv);
   state.activeId = conv.id;
@@ -1564,7 +1622,7 @@ window.hideDevSettings = () => {
  */
 async function bootstrap() {
   await initPlatformUser();
-  const hasAuthCode = captureAuthCodeFromUrl(getAuthCtx());
+  const hasAuthCode = await captureAuthCodeFromUrl(getAuthCtx());
   await loadQuestionBank();
   setConnHint();
   renderAll();
@@ -1581,6 +1639,15 @@ async function bootstrap() {
       return;
     }
   }
+  if (!hasAuthenticatedUserInfo()) {
+    setAccessDenied(true);
+    setTips("未获取到登录用户信息，请从已登录的工作平台入口进入。");
+    renderAll();
+    updateUserInfoDisplay();
+    updateAuthDisplay(getAuthCtx());
+    return;
+  }
+  setAccessDenied(false);
   await initConversations();
   if (!isConfigured(state.config)) {
     // first visit: guide to settings quickly

@@ -89,6 +89,192 @@
 └─ package.json
 ```
 
+## 代码说明
+
+
+
+### 前端代码说明
+
+前端代码集中在 `h5-chatbot/`，是一个原生 HTML/CSS/JavaScript H5 应用，没有使用 Vue、React 等框架。这样做的优点是部署简单，Node 服务直接托管静态文件即可；缺点是页面状态、事件绑定和渲染逻辑主要集中在 `app.js`，后续功能继续变多时需要注意拆分。
+
+| 文件 | 作用 | 讲解重点 |
+| --- | --- | --- |
+| `index.html` | 页面结构入口 | 定义聊天区、会话列表、设置面板、反馈弹窗、图片预览层等 DOM 节点 |
+| `styles.css` | 页面样式 | 负责移动端布局、消息气泡、按钮图标、弹窗、侧边会话列表、暗色/浅色视觉层次 |
+| `app.js` | 前端主控制器 | 管理全局状态、渲染消息、发送问题、保存会话、绑定按钮事件、初始化页面 |
+| `auth.js` | OAuth 登录模块 | 获取授权配置、跳转授权页、回调 code 换 token、调用 userinfo、静默登录 |
+| `chat-api.js` | 聊天接口模块 | 创建上游线程、发送聊天请求、解析 SSE 流、处理 `message/meta/progress/message_end` |
+| `feedback.js` | 反馈模块 | 点赞/点踩、点踩原因弹窗、查询反馈状态、确保拿到可反馈的外部消息 ID |
+| `markdown.js` | Markdown 渲染 | 使用 `markdown-it` 渲染文本、链接、图片、代码块，并做基础安全处理 |
+| `platform-bridge.js` | App 宿主桥接 | 兼容 Android/iOS 宿主能力，尝试读取 App 内登录用户信息 |
+| `utils.js` | 通用工具 | 时间、ID、URL 规范化、错误格式化、会话标题推导、滚动辅助 |
+| `question-bank.json` | 推荐问题库 | 首屏和追问建议的问题来源 |
+| `vendor/` | 第三方前端库 | 当前包含 SSE 解析器和 Markdown 渲染库 |
+| `static/` | 静态图片资源 | 机器人、用户、AI 标识等页面资源 |
+
+### `app.js` 主线
+
+`app.js` 是前端最适合重点讲的文件。它的主线可以概括为“状态初始化 -> 页面渲染 -> 用户输入 -> 调用聊天流 -> 写回会话 -> 反馈”。
+
+| 代码区域 | 作用 |
+| --- | --- |
+| `loadConfig` / `saveConfig` | 从 `localStorage` 读取和保存前端配置，例如 API Base URL、用户 ID |
+| `state` | 前端全局状态，保存当前配置、会话列表、当前会话、生成状态、登录用户信息 |
+| `initPlatformUser` | 页面启动时尝试通过 App 宿主桥获取用户信息，并同步到本地状态 |
+| `initConversations` | 优先从服务端 MySQL 读取会话，失败时回退到本地缓存 |
+| `saveConversations` | 本地缓存和服务端会话同步的统一入口 |
+| `renderAll` / `createMessageNode` | 渲染聊天消息、按钮、反馈状态和空状态 |
+| `sendMessage` | 发送消息的核心流程：追加用户消息、创建线程、发起流式聊天、更新 assistant 气泡 |
+| `stopGeneration` | 中断当前流式请求 |
+| `newChat` / `resetConversation` / `clearChat` | 会话管理 |
+| `getAuthCtx` / `getFeedbackCtx` / `getChatApiCtx` | 给拆分模块注入所需上下文，避免子模块直接依赖全局变量 |
+| `bootstrap` | 页面启动入口，串起用户信息、OAuth 回调、题库、会话和 UI 初始化 |
+
+`sendMessage`
+
+1. 读取输入框内容，校验是否为空、是否已有请求在进行。
+2. 生成用户消息和临时 assistant 消息，立即渲染到页面。
+3. 如果当前会话还没有上游 `threadId`，先调用 `createAgentThread` 创建线程。
+4. 调用 `agentChatStream` 读取流式响应。
+5. 收到 `progress` 时展示“正在检索知识库”等等待提示。
+6. 收到 `message` 时把分片追加到 assistant 消息内容。
+7. 收到 `meta` 时保存上游消息 ID，供反馈接口使用。
+8. 流结束后保存会话；如果没有正文，展示空回答兜底文案。
+
+### 登录与用户信息代码
+
+登录有两条用户信息来源：
+
+| 来源 | 代码位置 | 说明 |
+| --- | --- | --- |
+| OAuth | `auth.js` + `server/server.js` | H5 走 OAuth 授权码流程，后端代理 token 和 userinfo，避免前端直接暴露 client_secret |
+| App 宿主桥 | `platform-bridge.js` | 在 Android/iOS 宿主环境中调用 `jsGetUserBean` 或 `getLoginUserInfo` 获取登录用户 |
+
+OAuth 流程如下：
+
+1. 用户点击登录按钮，`startAuthFlow` 请求 `/api/auth-config`。
+2. 前端拼接授权 URL，带上 `client_id`、`redirect_uri`、`scope`、`state` 后跳转。
+3. OAuth 服务回调到 `AUTH_REDIRECT_URI`，URL 上带 `code` 和 `state`。
+4. `captureAuthCodeFromUrl` 读取 code，调用 `/api/auth-token` 换取 token。
+5. 前端拿到 access token 后调用 `/api/auth-userinfo` 获取用户信息。
+6. `applyUserInfoFromResponse` 将 `name`、`phone_number`、`orgName` 映射到页面状态。
+
+为了方便排查登录问题，当前还会把前端实际拿到的用户信息上报到 `/api/auth-userinfo-log`，后端写入 `server-YYYY-MM-DD.log`，事件名为 `auth:userinfo:client`。这类日志包含用户敏感信息，只建议在调试阶段开启或严格限制服务器日志访问权限。
+
+### 聊天流代码
+
+聊天相关代码分布在前端 `chat-api.js` 和后端 `server/server.js`：
+
+| 阶段 | 前端函数 | 后端函数 | 说明 |
+| --- | --- | --- | --- |
+| 创建线程 | `createAgentThread` | `handleAltThread` | 创建 ai-wiki / ChatbotAgent 线程，并带上用户元信息 |
+| 非流式聊天 | `agentChat` | `handleAltChat` | 保留的阻塞式聊天接口，主要用于兼容或调试 |
+| 流式聊天 | `agentChatStream` | `handleAltChatStream` | 主聊天链路，前端逐段显示回答 |
+| SSE 解析 | `dispatchStreamEvent` | `appendAltStream` / `consumeAltPayload` | 前端解析代理输出，后端解析上游输出 |
+| 进度提示 | `onProgress` 回调 | `extractAltProgress` / `writeAltProgress` | 将 ai-wiki 工具事件转换为“正在检索知识库”等提示 |
+| 空回答兜底 | `sendMessage` 结束处理 | `ALT_EMPTY_ANSWER` | 避免上游无正文时页面出现空白回复 |
+
+后端流式接口对前端输出的是标准 SSE。常见事件：
+
+- `message`：回答正文分片。
+- `progress`：知识库检索、工具调用等等待提示。
+- `meta`：上游消息 ID，用于后续反馈。
+- `message_end`：本轮响应结束。
+
+### 后端代码说明
+
+后端入口是 `server/server.js`，使用 Node 原生 `http` 模块实现，没有引入 Express。它同时承担三类职责：静态资源服务、业务 API、上游代理。
+
+| 代码区域 | 作用 |
+| --- | --- |
+| 环境变量常量 | 读取端口、数据库、OAuth、ChatbotAgent、反馈服务等配置 |
+| 日志函数 | `appendJsonLog`、`appendAuthUserInfoLog` 写入每日 JSON 行日志 |
+| 数据库初始化 | `ensureSchema` 启动时检查并补齐 `messages.external_message_id` |
+| CORS / JSON 工具 | `corsHeaders`、`sendJson`、`readBodyJson` 处理通用 HTTP 逻辑 |
+| 会话模型规范化 | `normalizeMessage`、`normalizeConversation`、`normalizeUserPayload` |
+| MySQL 会话读写 | `fetchUserConversations`、`syncUserConversations` |
+| 上游认证 | `requestAltToken`、`getAltAuthToken` 获取 ChatbotAgent Bearer token |
+| 聊天响应解析 | `extractAltAnswer`、`stripAltText`、`filterAltText`、`consumeAltPayload` |
+| ai-wiki 进度识别 | `collectAltToolCalls`、`formatAltToolProgress`、`extractAltProgress` |
+| 反馈 ID 映射 | `resolveFeedbackMessageId` 将流式消息 ID 映射为反馈接口需要的整数 ID |
+| OAuth 代理 | `handleAuthToken`、`handleAuthUserInfo` |
+| 静态文件服务 | `handleStatic` 将 `h5-chatbot/` 作为前端页面目录 |
+| 路由入口 | `http.createServer` 内部按 method + pathname 分发 |
+
+### 后端路由说明
+
+后端路由都集中在 `server.js` 底部的 `http.createServer` 中，讲解时可以直接按表说明。
+
+| 方法 | 路径 | 处理函数 | 用途 |
+| --- | --- | --- | --- |
+| `GET` | `/api/health` | 内联处理 | 健康检查，确认 Node 服务可访问 |
+| `GET` | `/api/auth-config` | 内联处理 | 返回前端发起 OAuth 所需的授权地址、client_id、redirect_uri、scope |
+| `POST` | `/api/auth-token` | `handleAuthToken` | 用授权码换 access token / refresh token |
+| `GET` | `/api/auth-userinfo` | `handleAuthUserInfo` | 使用 access token 请求 OAuth userinfo |
+| `POST` | `/api/auth-userinfo-log` | `handleAuthUserInfoClientLog` | 记录前端实际拿到的用户信息，便于调试 |
+| `GET` | `/api/conversations` | `handleConversationsList` | 按 userId 读取会话列表 |
+| `POST` | `/api/conversations/sync` | `handleConversationsSync` | 将前端会话快照同步到 MySQL |
+| `GET` | `/api/message-meta` | `handleMessageMeta` | 根据本地消息 ID 查询外部消息 ID |
+| `POST` | `/api/alt-thread` | `handleAltThread` | 创建上游线程 |
+| `POST` | `/api/alt-chat` | `handleAltChat` | 非流式聊天 |
+| `POST` | `/api/alt-chat-stream` | `handleAltChatStream` | 流式聊天主接口 |
+| `POST` | `/api/feedback` | `handleFeedback` | 提交点赞 / 点踩 |
+| `GET` | `/api/feedback` | `handleFeedbackStatus` | 查询某条消息的反馈状态 |
+| `POST` | `/api/chat-messages` | `handleChatMessages` | Dify 兼容代理接口 |
+| `GET` / `HEAD` | 静态路径 | `handleStatic` | 返回 H5 页面和静态资源 |
+
+### 数据库代码说明
+
+数据库初始化脚本在 `server/sql/init.sql`，核心是三张表：
+
+| 表 | 作用 | 关键字段 |
+| --- | --- | --- |
+| `users` | 保存聊天用户 | `user_key`、`active_conversation_key` |
+| `conversations` | 保存会话 | `conversation_key`、`title`、`platform`、`dify_conversation_id`、`updated_at_ms` |
+| `messages` | 保存消息 | `role`、`content`、`external_message_id`、`position`、`created_at_ms` |
+
+前端会话同步不是逐条消息增量写入，而是把当前用户的会话快照提交给 `/api/conversations/sync`。后端会规范化 payload，然后写入 users、conversations、messages。`external_message_id` 很关键，它把本地消息和上游消息关联起来，点赞 / 点踩时会用它定位上游消息。
+
+### 日志代码说明
+
+日志目录是 `server/logs/`，代码通过 JSON Lines 追加写入，便于用 `grep` / `rg` / 日志采集系统检索。
+
+| 日志 | 典型事件 | 用途 |
+| --- | --- | --- |
+| `server-YYYY-MM-DD.log` | `server:start`、`feedback:*`、`auth:userinfo:*` | 服务启动、反馈映射、认证用户信息排查 |
+| `message-YYYY-MM-DD.log` | `chat:stream:*` 摘要 | 排查某次聊天是否有上游消息 ID、回答长度、线程 ID |
+| systemd journal | Node 控制台输出 | 查看启动失败、异常堆栈、控制台调试信息 |
+
+常用排查命令：
+
+```bash
+grep "auth:userinfo" server/logs/server-$(date +%F).log
+grep "feedback" server/logs/server-$(date +%F).log
+grep "chat:stream" server/logs/message-$(date +%F).log
+journalctl -u chatbot -n 100 --no-pager
+```
+
+### 部署与同步代码说明
+
+部署相关代码主要有三个文件：
+
+| 文件 | 作用 |
+| --- | --- |
+| `server/start.sh` | Linux 启动脚本，加载 `.env` 后启动 `node server/server.js` |
+| `server/start.ps1` | Windows 启动脚本，适合本地开发测试 |
+| `deploy/chatbot.service` | systemd 服务定义，用于生产环境守护进程 |
+| `scripts/sync-from-github.sh` | 服务器同步脚本，拉取最新代码、按需安装依赖、执行重启和健康检查 |
+| `scripts/sync-from-github.env.example` | 同步脚本配置模板，定义分支、安装命令、重启命令、健康检查地址 |
+
+同步脚本启动时会自动读取 `scripts/sync-from-github.env`。如果配置了：
+
+```bash
+RESTART_CMD="systemctl restart chatbot"
+HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
+```
+
+那么每次同步成功后会自动重启 systemd 服务，并访问健康检查接口确认服务可用。
+
 ## 环境准备
 
 ### 本地开发 / 测试
@@ -566,6 +752,7 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 | `GET` | `/api/auth-config` | 获取 OAuth 配置 |
 | `POST` | `/api/auth-token` | 授权码换 token |
 | `GET` | `/api/auth-userinfo` | 获取用户信息 |
+| `POST` | `/api/auth-userinfo-log` | 记录前端实际获取到的用户信息，便于调试 |
 | `GET` | `/api/conversations` | 获取会话列表 |
 | `POST` | `/api/conversations/sync` | 同步会话 |
 | `GET` | `/api/message-meta` | 查询本地消息元信息 |
