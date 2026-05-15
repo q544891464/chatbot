@@ -94,6 +94,13 @@ const el = {
   imageViewerBackdrop: document.getElementById("imageViewerBackdrop"),
   imageViewerContent: document.getElementById("imageViewerContent"),
   imageViewerImg: document.getElementById("imageViewerImg"),
+  videoViewer: document.getElementById("videoViewer"),
+  videoViewerBackdrop: document.getElementById("videoViewerBackdrop"),
+  videoViewerContent: document.getElementById("videoViewerContent"),
+  videoViewerCloseBtn: document.getElementById("videoViewerCloseBtn"),
+  videoViewerPlayer: document.getElementById("videoViewerPlayer"),
+  videoViewerTitle: document.getElementById("videoViewerTitle"),
+  videoViewerHint: document.getElementById("videoViewerHint"),
 };
 /**
  * 从本地存储恢复页面配置，并补齐默认值。
@@ -1092,6 +1099,30 @@ function getTouchDistance(t1, t2) {
   const dy = t1.clientY - t2.clientY;
   return Math.hypot(dx, dy);
 }
+
+function getVideoLinkInfo(href) {
+  let url;
+  try {
+    url = new URL(String(href || ""), window.location.href);
+  } catch {
+    return null;
+  }
+  const pathname = url.pathname.toLowerCase();
+  const ext = pathname.match(/\.([a-z0-9]+)$/)?.[1] || "";
+  const typeMap = {
+    mp4: "video/mp4",
+    m4v: "video/mp4",
+    webm: "video/webm",
+    ogg: "video/ogg",
+    ogv: "video/ogg",
+    mov: "video/quicktime",
+    m3u8: "application/vnd.apple.mpegurl",
+  };
+  const type = typeMap[ext];
+  if (!type) return null;
+  return { href: url.href, type, ext };
+}
+
 /**
  * 打开图片预览弹层。
  *
@@ -1113,6 +1144,51 @@ function closeImageViewer() {
   el.imageViewer.setAttribute("aria-hidden", "true");
   el.imageViewerImg.src = "";
   setImageScale(1);
+}
+
+function openVideoViewer(info, title = "") {
+  const player = el.videoViewerPlayer;
+  if (!el.videoViewer || !player || !info?.href) return;
+  closeImageViewer();
+  flushLocalConversationSave();
+  if (el.videoViewerTitle) {
+    el.videoViewerTitle.textContent = title || "视频播放";
+  }
+  if (el.videoViewerHint) {
+    el.videoViewerHint.hidden = true;
+    el.videoViewerHint.textContent = "";
+  }
+  player.pause();
+  player.removeAttribute("src");
+  player.innerHTML = "";
+  const canPlay = info.ext !== "m3u8" || player.canPlayType(info.type);
+  if (!canPlay) {
+    if (el.videoViewerHint) {
+      el.videoViewerHint.textContent = "当前浏览器不支持播放该视频格式，请在支持 HLS 的客户端中打开。";
+      el.videoViewerHint.hidden = false;
+    }
+  } else {
+    const source = document.createElement("source");
+    source.src = info.href;
+    source.type = info.type;
+    player.appendChild(source);
+    player.load();
+  }
+  el.videoViewer.setAttribute("aria-hidden", "false");
+}
+
+function closeVideoViewer() {
+  const player = el.videoViewerPlayer;
+  if (!el.videoViewer || !player) return;
+  player.pause();
+  player.removeAttribute("src");
+  player.innerHTML = "";
+  player.load();
+  el.videoViewer.setAttribute("aria-hidden", "true");
+  if (el.videoViewerHint) {
+    el.videoViewerHint.hidden = true;
+    el.videoViewerHint.textContent = "";
+  }
 }
 /**
  * 根据当前视口高度更新页面 CSS 变量。
@@ -1560,6 +1636,7 @@ document.addEventListener("keydown", (e) => {
     closeSettings();
     closeChatList();
     closeImageViewer();
+    closeVideoViewer();
     closeFeedbackModal(el, feedbackState, null);
   }
 });
@@ -1605,8 +1682,23 @@ el.imageViewerBackdrop.addEventListener("click", closeImageViewer);
 el.imageViewerContent.addEventListener("click", (e) => {
   if (e.target === el.imageViewerContent) closeImageViewer();
 });
+el.videoViewerBackdrop?.addEventListener("click", closeVideoViewer);
+el.videoViewerCloseBtn?.addEventListener("click", closeVideoViewer);
+el.videoViewerContent?.addEventListener("click", (e) => {
+  if (e.target === el.videoViewerContent) closeVideoViewer();
+});
 el.messages.addEventListener("click", (e) => {
   const target = e.target;
+  if (!(target instanceof Element)) return;
+  const link = target.closest("a");
+  if (link && link.closest(".md")) {
+    const videoInfo = getVideoLinkInfo(link.href);
+    if (videoInfo) {
+      e.preventDefault();
+      openVideoViewer(videoInfo, link.textContent?.trim() || "视频播放");
+      return;
+    }
+  }
   if (!(target instanceof HTMLImageElement)) return;
   if (!target.closest(".md")) return;
   openImageViewer(target.src, target.alt || "图片预览");

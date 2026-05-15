@@ -630,6 +630,54 @@ body.dev-settings-visible .topbar__actions #settingsBtn{
   touch-action: none;
   user-select: none;
 }
+.video-viewer__content{
+  position: absolute;
+  inset: max(18px, var(--safe-t)) 16px max(18px, var(--safe-b));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+  width: min(960px, calc(100vw - 32px));
+  margin: 0 auto;
+}
+.video-viewer__bar{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #ffffff;
+}
+.video-viewer__title{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 800;
+}
+.video-viewer__close{
+  flex: 0 0 auto;
+  color: #ffffff;
+  border-color: rgba(255,255,255,0.24);
+  background: rgba(255,255,255,0.12);
+}
+.video-viewer__player{
+  width: 100%;
+  max-height: min(74vh, 620px);
+  aspect-ratio: 16 / 9;
+  border-radius: 16px;
+  background: #000000;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.42);
+}
+.video-viewer__hint{
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 12px;
+  padding: 12px 14px;
+  color: #ffffff;
+  background: rgba(15,23,42,0.7);
+  font-size: 14px;
+  line-height: 1.6;
+}
 
 .composer{
   position: fixed;
