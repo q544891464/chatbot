@@ -348,6 +348,30 @@ function saveConversations() {
     setTips(detail ? `会话同步失败：${detail}` : "会话同步失败，请检查服务是否启动。");
   });
 }
+
+function saveConversationsLocalOnly() {
+  sortConversations();
+  saveConversationsToLocal({
+    activeId: state.activeId,
+    items: state.conversations.map(serializeConversation),
+  });
+}
+
+function scheduleLocalConversationSave() {
+  if (localPersistTimer) return;
+  localPersistTimer = window.setTimeout(() => {
+    localPersistTimer = 0;
+    saveConversationsLocalOnly();
+  }, 300);
+}
+
+function flushLocalConversationSave() {
+  if (localPersistTimer) {
+    window.clearTimeout(localPersistTimer);
+    localPersistTimer = 0;
+  }
+  saveConversationsLocalOnly();
+}
 const initialConfig = loadConfig();
 saveConfig(initialConfig);
 const initialConversation = createConversation({ platform: "agent" });
@@ -371,6 +395,7 @@ const state = {
 };
 let composerObserver = null;
 let composerHeightRaf = 0;
+let localPersistTimer = 0;
 const feedbackState = initFeedbackState();
 const IS_MOBILE = (() => {
   const ua = navigator.userAgent || "";
@@ -1316,6 +1341,7 @@ async function sendMessage() {
       },
       onDelta: (chunk) => {
         assistantMsg.content += chunk;
+        scheduleLocalConversationSave();
         setBubbleContent(
           assistantNode.bubble,
           "assistant",
@@ -1541,8 +1567,11 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     updateScrollButton();
     updateDevSettingsVisibility();
+  } else {
+    flushLocalConversationSave();
   }
 });
+window.addEventListener("pagehide", flushLocalConversationSave);
 window.addEventListener("resize", updateDevSettingsVisibility, { passive: true });
 setInterval(updateDevSettingsVisibility, 1000);
 el.settingsForm.addEventListener("submit", (e) => {
