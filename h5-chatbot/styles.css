@@ -637,7 +637,7 @@ body.dev-settings-visible .topbar__actions #settingsBtn{
   flex-direction: column;
   justify-content: center;
   gap: 12px;
-  width: min(960px, calc(100vw - 32px));
+  width: min(420px, calc(100vw - 32px));
   margin: 0 auto;
 }
 .video-viewer__bar{
@@ -663,11 +663,26 @@ body.dev-settings-visible .topbar__actions #settingsBtn{
 }
 .video-viewer__player{
   width: 100%;
-  max-height: min(74vh, 620px);
-  aspect-ratio: 16 / 9;
+  max-height: min(78vh, 760px);
+  aspect-ratio: 9 / 16;
+  object-fit: contain;
   border-radius: 16px;
   background: #000000;
   box-shadow: 0 24px 60px rgba(0,0,0,0.42);
+}
+.video-viewer.is-landscape .video-viewer__content{
+  width: min(960px, calc(100vw - 32px));
+}
+.video-viewer.is-landscape .video-viewer__player{
+  max-height: min(74vh, 620px);
+  aspect-ratio: 16 / 9;
+}
+.video-viewer.is-portrait .video-viewer__content{
+  width: min(420px, calc(100vw - 32px));
+}
+.video-viewer.is-portrait .video-viewer__player{
+  max-height: min(78vh, 760px);
+  aspect-ratio: 9 / 16;
 }
 .video-viewer__hint{
   border: 1px solid rgba(255,255,255,0.18);

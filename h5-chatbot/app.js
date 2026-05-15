@@ -1151,6 +1151,8 @@ function openVideoViewer(info, title = "") {
   if (!el.videoViewer || !player || !info?.href) return;
   closeImageViewer();
   flushLocalConversationSave();
+  el.videoViewer.classList.remove("is-landscape", "is-portrait");
+  el.videoViewer.classList.add("is-portrait");
   if (el.videoViewerTitle) {
     el.videoViewerTitle.textContent = title || "视频播放";
   }
@@ -1185,6 +1187,7 @@ function closeVideoViewer() {
   player.innerHTML = "";
   player.load();
   el.videoViewer.setAttribute("aria-hidden", "true");
+  el.videoViewer.classList.remove("is-landscape", "is-portrait");
   if (el.videoViewerHint) {
     el.videoViewerHint.hidden = true;
     el.videoViewerHint.textContent = "";
@@ -1686,6 +1689,13 @@ el.videoViewerBackdrop?.addEventListener("click", closeVideoViewer);
 el.videoViewerCloseBtn?.addEventListener("click", closeVideoViewer);
 el.videoViewerContent?.addEventListener("click", (e) => {
   if (e.target === el.videoViewerContent) closeVideoViewer();
+});
+el.videoViewerPlayer?.addEventListener("loadedmetadata", () => {
+  const player = el.videoViewerPlayer;
+  if (!el.videoViewer || !player) return;
+  const isLandscape = Number(player.videoWidth || 0) >= Number(player.videoHeight || 0);
+  el.videoViewer.classList.toggle("is-landscape", isLandscape);
+  el.videoViewer.classList.toggle("is-portrait", !isLandscape);
 });
 el.messages.addEventListener("click", (e) => {
   const target = e.target;
