@@ -1371,11 +1371,35 @@ body{
 .btn.ghost{
   background: #f8fafc;
 }
+body.access-denied{
+  background: #f8fafc;
+}
+body.access-denied .app{
+  padding: 0;
+}
+body.access-denied .topbar,
+body.access-denied .composer,
+body.access-denied .fab,
+body.access-denied .modal,
+body.access-denied .lightbox{
+  display: none !important;
+}
+body.access-denied .messages{
+  min-height: 100dvh;
+  padding: max(24px, var(--safe-t)) 20px max(24px, var(--safe-b));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
 .empty--locked .empty__card{
+  width: min(420px, 100%);
   border-color: #f1c9c9;
   background: #fffafa;
+  text-align: center;
 }
 .empty--locked .empty__icon--locked{
+  margin: 0 auto 16px;
   background: #fff1f1;
   border-color: #f1c9c9;
   color: #b42318;

@@ -679,10 +679,10 @@ function createAccessDeniedNode() {
   icon.textContent = "!";
   const title = document.createElement("div");
   title.className = "empty__title";
-  title.textContent = "无法访问";
+  title.textContent = "禁止访问";
   const sub = document.createElement("div");
   sub.className = "empty__sub";
-  sub.textContent = "未获取到登录用户信息，请从已登录的工作平台入口进入。";
+  sub.textContent = "未获取到登录用户信息，请从已登录的工作平台入口进入";
   card.appendChild(icon);
   card.appendChild(title);
   card.appendChild(sub);
@@ -1211,6 +1211,10 @@ function setBusy(busy) {
  * 根据滚动位置控制“滚到底部”按钮显示。
  */
 function updateScrollButton() {
+  if (state.accessDenied) {
+    el.scrollBtn.hidden = true;
+    return;
+  }
   const show = !shouldAutoScroll(el.messages);
   el.scrollBtn.hidden = !show;
 }
