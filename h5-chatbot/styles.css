@@ -207,6 +207,7 @@ body::after{
   padding: 12px 14px calc(160px + var(--safe-b));
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .empty{

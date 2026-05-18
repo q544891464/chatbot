@@ -400,6 +400,7 @@ const state = {
 let composerObserver = null;
 let composerHeightRaf = 0;
 let localPersistTimer = 0;
+let scrollLockTouchY = 0;
 const feedbackState = initFeedbackState();
 const viewportState = {
   width: 0,
@@ -1155,6 +1156,16 @@ function updateVhVar(options = {}) {
   document.documentElement.style.setProperty("--vh", `${height * 0.01}px`);
   document.documentElement.style.setProperty("--app-height", `${height}px`);
 }
+
+function shouldLockScrollBoundary(scroller, currentY) {
+  if (!scroller) return true;
+  const deltaY = currentY - scrollLockTouchY;
+  const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
+  if (maxScrollTop <= 1) return true;
+  if (scroller.scrollTop <= 0 && deltaY > 0) return true;
+  if (scroller.scrollTop >= maxScrollTop - 1 && deltaY < 0) return true;
+  return false;
+}
 /**
  * 组合当前用户元信息，供线程创建和聊天接口使用。
  *
@@ -1627,9 +1638,21 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 document.addEventListener(
+  "touchstart",
+  (e) => {
+    scrollLockTouchY = e.touches?.[0]?.clientY || 0;
+  },
+  { passive: true },
+);
+document.addEventListener(
   "touchmove",
   (e) => {
-    if (e.target instanceof Element && e.target.closest(".messages, .modal__sheet, .lightbox__content")) {
+    if (!(e.target instanceof Element)) {
+      e.preventDefault();
+      return;
+    }
+    const scroller = e.target.closest(".messages, .modal__sheet, .lightbox__content");
+    if (scroller && !shouldLockScrollBoundary(scroller, e.touches?.[0]?.clientY || 0)) {
       return;
     }
     e.preventDefault();
