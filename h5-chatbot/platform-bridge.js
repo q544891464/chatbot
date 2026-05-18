@@ -186,9 +186,18 @@ function getSafeUrlInfo(rawUrl) {
 function getBridgeDiagnostics() {
   const androidMethod = window.androidMethod;
   const iosBridge = window.iOSMethodBridge;
+  const webkitHandlers = window.webkit?.messageHandlers;
   const androidMethodKeys =
     androidMethod && typeof androidMethod === "object"
       ? Object.keys(androidMethod).slice(0, 80)
+      : [];
+  const iosBridgeKeys =
+    iosBridge && typeof iosBridge === "object"
+      ? Object.keys(iosBridge).slice(0, 80)
+      : [];
+  const webkitHandlerKeys =
+    webkitHandlers && typeof webkitHandlers === "object"
+      ? Object.keys(webkitHandlers).slice(0, 80)
       : [];
   return {
     userAgent: ua,
@@ -209,7 +218,10 @@ function getBridgeDiagnostics() {
       androidMethodKeys,
       hasAndroidSendCommand: typeof androidMethod?.sendCommand === "function",
       hasIOSMethodBridge: Boolean(iosBridge),
+      iosBridgeKeys,
       hasIOSPostMessage: typeof iosBridge?.postMessage === "function",
+      hasWebkitMessageHandlers: Boolean(webkitHandlers),
+      webkitHandlerKeys,
       hasWeixinJSBridge: Boolean(window.WeixinJSBridge),
       hasAlipayJSBridge: Boolean(window.AlipayJSBridge),
     },
@@ -302,8 +314,26 @@ async function exitH5Page(onAttempt) {
     }
   }
 
+  if (isIos && window.webkit?.messageHandlers) {
+    const handlers = ["jsOnBackPressed", "onBack", "closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
+    for (const handler of handlers) {
+      const bridgeHandler = window.webkit.messageHandlers[handler];
+      if (!bridgeHandler || typeof bridgeHandler.postMessage !== "function") continue;
+      try {
+        reportExitAttempt(onAttempt, { channel: "webkitMessageHandler", method: handler, stage: "before" });
+        bridgeHandler.postMessage({ action: handler, data: {} });
+        const hidden = await waitForPageHidden();
+        reportExitAttempt(onAttempt, { channel: "webkitMessageHandler", method: handler, stage: "after", result: hidden ? "hidden" : "visible" });
+        if (hidden) return true;
+      } catch (err) {
+        reportExitAttempt(onAttempt, { channel: "webkitMessageHandler", method: handler, stage: "error", error: String(err?.message || err || "unknown") });
+        // try next handler
+      }
+    }
+  }
+
   if (isIos && window.iOSMethodBridge && typeof window.iOSMethodBridge.postMessage === "function") {
-    const apis = ["closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
+    const apis = ["jsOnBackPressed", "onBack", "closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
     for (const api of apis) {
       try {
         reportExitAttempt(onAttempt, { channel: "iOSMethodBridge", method: api, stage: "before" });
