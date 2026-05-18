@@ -116,6 +116,13 @@ function appendAuthUserInfoLog(payload) {
   });
 }
 
+function appendClientLog(payload) {
+  appendJsonLog(SERVER_LOG_PREFIX, {
+    ts: new Date().toISOString(),
+    ...payload,
+  });
+}
+
 /**
  * 启动时检查并补齐数据库缺失字段，兼容旧表结构。
  *
@@ -2141,6 +2148,16 @@ async function handleAuthUserInfoClientLog(req, res) {
   sendJson(res, 200, { ok: true });
 }
 
+async function handleClientLog(req, res) {
+  const body = await readBodyJson(req);
+  appendClientLog({
+    event: String(body.event || "client:log"),
+    source: String(body.source || "h5"),
+    data: body.data && typeof body.data === "object" ? body.data : {},
+  });
+  sendJson(res, 200, { ok: true });
+}
+
 /**
  * 处理消息反馈提交接口。
  *
@@ -2354,6 +2371,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/auth-userinfo-log") {
       await handleAuthUserInfoClientLog(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/client-log") {
+      await handleClientLog(req, res);
       return;
     }
 

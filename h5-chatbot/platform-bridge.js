@@ -147,21 +147,112 @@ function postCloseScheme(url) {
   window.setTimeout(() => iframe.remove(), 800);
 }
 
-async function exitH5Page() {
+function getSafeLocationInfo() {
+  const searchKeys = [];
+  try {
+    new URLSearchParams(window.location.search || "").forEach((_, key) => {
+      if (!searchKeys.includes(key)) searchKeys.push(key);
+    });
+  } catch {
+    // ignore malformed search params
+  }
+  return {
+    origin: window.location.origin,
+    pathname: window.location.pathname,
+    searchKeys,
+    hasHash: Boolean(window.location.hash),
+  };
+}
+
+function getSafeUrlInfo(rawUrl) {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl, window.location.origin);
+    const searchKeys = [];
+    parsed.searchParams.forEach((_, key) => {
+      if (!searchKeys.includes(key)) searchKeys.push(key);
+    });
+    return {
+      origin: parsed.origin,
+      pathname: parsed.pathname,
+      searchKeys,
+      hasHash: Boolean(parsed.hash),
+    };
+  } catch {
+    return { raw: "unparseable" };
+  }
+}
+
+function getBridgeDiagnostics() {
+  const androidMethod = window.androidMethod;
+  const iosBridge = window.iOSMethodBridge;
+  const androidMethodKeys =
+    androidMethod && typeof androidMethod === "object"
+      ? Object.keys(androidMethod).slice(0, 80)
+      : [];
+  return {
+    userAgent: ua,
+    referrer: getSafeUrlInfo(document.referrer || ""),
+    location: getSafeLocationInfo(),
+    isAndroid,
+    isIos,
+    isApp,
+    historyLength: window.history.length,
+    visibilityState: document.visibilityState,
+    hidden: document.hidden,
+    standalone:
+      Boolean(window.navigator.standalone) ||
+      window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      false,
+    bridge: {
+      hasAndroidMethod: Boolean(androidMethod),
+      androidMethodKeys,
+      hasAndroidSendCommand: typeof androidMethod?.sendCommand === "function",
+      hasIOSMethodBridge: Boolean(iosBridge),
+      hasIOSPostMessage: typeof iosBridge?.postMessage === "function",
+      hasWeixinJSBridge: Boolean(window.WeixinJSBridge),
+      hasAlipayJSBridge: Boolean(window.AlipayJSBridge),
+    },
+  };
+}
+
+function reportExitAttempt(onAttempt, detail) {
+  try {
+    if (typeof onAttempt === "function") {
+      onAttempt({
+        ...detail,
+        hidden: document.hidden,
+        visibilityState: document.visibilityState,
+      });
+    }
+  } catch {
+    // logging must not block exit
+  }
+}
+
+async function exitH5Page(onAttempt) {
   if (window.WeixinJSBridge && typeof window.WeixinJSBridge.call === "function") {
     try {
+      reportExitAttempt(onAttempt, { channel: "weixin", method: "closeWindow", stage: "before" });
       window.WeixinJSBridge.call("closeWindow");
-      if (await waitForPageHidden()) return true;
-    } catch {
+      const hidden = await waitForPageHidden();
+      reportExitAttempt(onAttempt, { channel: "weixin", method: "closeWindow", stage: "after", result: hidden ? "hidden" : "visible" });
+      if (hidden) return true;
+    } catch (err) {
+      reportExitAttempt(onAttempt, { channel: "weixin", method: "closeWindow", stage: "error", error: String(err?.message || err || "unknown") });
       // fallback below
     }
   }
 
   if (window.AlipayJSBridge && typeof window.AlipayJSBridge.call === "function") {
     try {
+      reportExitAttempt(onAttempt, { channel: "alipay", method: "closeWebview", stage: "before" });
       window.AlipayJSBridge.call("closeWebview");
-      if (await waitForPageHidden()) return true;
-    } catch {
+      const hidden = await waitForPageHidden();
+      reportExitAttempt(onAttempt, { channel: "alipay", method: "closeWebview", stage: "after", result: hidden ? "hidden" : "visible" });
+      if (hidden) return true;
+    } catch (err) {
+      reportExitAttempt(onAttempt, { channel: "alipay", method: "closeWebview", stage: "error", error: String(err?.message || err || "unknown") });
       // fallback below
     }
   }
@@ -181,9 +272,13 @@ async function exitH5Page() {
     for (const method of directMethods) {
       if (window.androidMethod && typeof window.androidMethod[method] === "function") {
         try {
+          reportExitAttempt(onAttempt, { channel: "androidMethod", method, stage: "before" });
           window.androidMethod[method]();
-          if (await waitForPageHidden()) return true;
-        } catch {
+          const hidden = await waitForPageHidden();
+          reportExitAttempt(onAttempt, { channel: "androidMethod", method, stage: "after", result: hidden ? "hidden" : "visible" });
+          if (hidden) return true;
+        } catch (err) {
+          reportExitAttempt(onAttempt, { channel: "androidMethod", method, stage: "error", error: String(err?.message || err || "unknown") });
           // try next method
         }
       }
@@ -192,9 +287,13 @@ async function exitH5Page() {
       const commands = ["closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
       for (const command of commands) {
         try {
+          reportExitAttempt(onAttempt, { channel: "androidSendCommand", method: command, stage: "before" });
           window.androidMethod.sendCommand(JSON.stringify({ command, params: {} }));
-          if (await waitForPageHidden()) return true;
-        } catch {
+          const hidden = await waitForPageHidden();
+          reportExitAttempt(onAttempt, { channel: "androidSendCommand", method: command, stage: "after", result: hidden ? "hidden" : "visible" });
+          if (hidden) return true;
+        } catch (err) {
+          reportExitAttempt(onAttempt, { channel: "androidSendCommand", method: command, stage: "error", error: String(err?.message || err || "unknown") });
           // try next command
         }
       }
@@ -205,9 +304,13 @@ async function exitH5Page() {
     const apis = ["closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
     for (const api of apis) {
       try {
+        reportExitAttempt(onAttempt, { channel: "iOSMethodBridge", method: api, stage: "before" });
         window.iOSMethodBridge.postMessage(JSON.stringify({ api, data: {} }));
-        if (await waitForPageHidden()) return true;
-      } catch {
+        const hidden = await waitForPageHidden();
+        reportExitAttempt(onAttempt, { channel: "iOSMethodBridge", method: api, stage: "after", result: hidden ? "hidden" : "visible" });
+        if (hidden) return true;
+      } catch (err) {
+        reportExitAttempt(onAttempt, { channel: "iOSMethodBridge", method: api, stage: "error", error: String(err?.message || err || "unknown") });
         // try next api
       }
     }
@@ -223,9 +326,13 @@ async function exitH5Page() {
   ];
   for (const scheme of schemes) {
     try {
+      reportExitAttempt(onAttempt, { channel: "scheme", method: scheme, stage: "before" });
       postCloseScheme(scheme);
-      if (await waitForPageHidden(300)) return true;
-    } catch {
+      const hidden = await waitForPageHidden(300);
+      reportExitAttempt(onAttempt, { channel: "scheme", method: scheme, stage: "after", result: hidden ? "hidden" : "visible" });
+      if (hidden) return true;
+    } catch (err) {
+      reportExitAttempt(onAttempt, { channel: "scheme", method: scheme, stage: "error", error: String(err?.message || err || "unknown") });
       // try next scheme
     }
   }
@@ -233,4 +340,4 @@ async function exitH5Page() {
   return false;
 }
 
-export { isAndroid, isIos, isApp, callApp, exitH5Page, getLoginUserInfo };
+export { isAndroid, isIos, isApp, callApp, exitH5Page, getBridgeDiagnostics, getLoginUserInfo };

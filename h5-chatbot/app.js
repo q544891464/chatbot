@@ -1,6 +1,7 @@
 ﻿import { getLoginUserInfo } from "./platform-bridge.js";
 import { renderMarkdownLite } from "./markdown.js";
 import { exitH5Page } from "./platform-bridge.js";
+import { getBridgeDiagnostics } from "./platform-bridge.js";
 import {
   clampMessages,
   deriveTitleFromMessages,
@@ -215,6 +216,15 @@ function logAuthUserInfo(source, userInfo) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source, userInfo }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+function logClientEvent(event, data = {}) {
+  fetch(`${getStoreBase()}/client-log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event, source: "h5-chatbot", data }),
     keepalive: true,
   }).catch(() => {});
 }
@@ -1504,7 +1514,17 @@ function newChat() {
 
 async function goBack() {
   flushLocalConversationSave();
-  const exited = await exitH5Page();
+  logClientEvent("client:exit:click", getBridgeDiagnostics());
+  const attempts = [];
+  const exited = await exitH5Page((detail) => {
+    attempts.push(detail);
+    logClientEvent("client:exit:attempt", detail);
+  });
+  logClientEvent("client:exit:result", {
+    exited,
+    attempts,
+    diagnostics: getBridgeDiagnostics(),
+  });
   if (exited) {
     return;
   }
@@ -1647,6 +1667,7 @@ if (IS_MOBILE) {
  * @returns {Promise<void>}
  */
 async function bootstrap() {
+  logClientEvent("client:open", getBridgeDiagnostics());
   await initPlatformUser();
   const hasAuthCode = await captureAuthCodeFromUrl(getAuthCtx());
   await loadQuestionBank();
