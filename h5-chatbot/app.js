@@ -1651,7 +1651,7 @@ document.addEventListener(
       e.preventDefault();
       return;
     }
-    const scroller = e.target.closest(".messages, .modal__sheet, .lightbox__content");
+    const scroller = e.target.closest(".messages, .chatlist, .modal__sheet, .lightbox__content");
     if (scroller && !shouldLockScrollBoundary(scroller, e.touches?.[0]?.clientY || 0)) {
       return;
     }

@@ -846,6 +846,8 @@ body::after{
 }
 .modal__sheet--list{
   max-height: min(80vh, 620px);
+  display: flex;
+  flex-direction: column;
 }
 .modal__sheet--feedback{
   max-height: min(70vh, 520px);
@@ -856,8 +858,12 @@ body::after{
   display:flex;
   flex-direction:column;
   gap:12px;
-  max-height: min(70vh, 520px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: calc(min(80vh, 620px) - 72px);
   overflow:auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .chatlist__item{
   border: 1px solid rgba(255,255,255,0.78);
