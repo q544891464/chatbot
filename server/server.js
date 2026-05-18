@@ -563,9 +563,15 @@ async function requestAltToken() {
   params.set("grant_type", "password");
   params.set("username", ALT_AUTH_USERNAME);
   params.set("password", ALT_AUTH_PASSWORD);
-  params.set("scope", ALT_AUTH_SCOPE);
-  params.set("client_id", ALT_AUTH_CLIENT_ID);
-  params.set("client_secret", ALT_AUTH_CLIENT_SECRET);
+  if (String(ALT_AUTH_SCOPE || "").trim()) {
+    params.set("scope", ALT_AUTH_SCOPE);
+  }
+  if (String(ALT_AUTH_CLIENT_ID || "").trim()) {
+    params.set("client_id", ALT_AUTH_CLIENT_ID);
+  }
+  if (String(ALT_AUTH_CLIENT_SECRET || "").trim()) {
+    params.set("client_secret", ALT_AUTH_CLIENT_SECRET);
+  }
 
   const res = await safeFetch(ALT_AUTH_URL, {
     method: "POST",

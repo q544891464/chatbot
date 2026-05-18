@@ -687,7 +687,7 @@ function createEmptyStateNode() {
     state.questionBank && state.questionBank.length
       ? state.questionBank
       : DEFAULT_QUESTION_BANK;
-  promptList.slice(0, 3).forEach((text) => {
+  pickRandomQuestions(promptList, 3, "").forEach((text) => {
     prompts.appendChild(createPromptButton(text, "empty__prompt"));
   });
   card.appendChild(icon);
@@ -1283,6 +1283,7 @@ async function sendMessage() {
   if (conv.title === "新对话") {
     conv.title = deriveTitleFromMessages(conv.messages);
   }
+  let createThreadError = "";
   if (!conv.conversationId) {
     try {
       conv.conversationId = await createAgentThread(getChatApiCtx(), conv.title);
@@ -1290,7 +1291,8 @@ async function sendMessage() {
       saveConversations();
       updateConversationList();
     } catch (err) {
-      setTips(String(err?.message || err));
+      createThreadError = String(err?.message || err || "无法创建对话 ID");
+      setTips(createThreadError);
     }
   }
   const userNode = createMessageNode(conv.messages[conv.messages.length - 1]);
@@ -1318,7 +1320,7 @@ async function sendMessage() {
   setBusy(true);
   try {
     if (!conv.conversationId) {
-      throw new Error("无法创建对话 ID");
+      throw new Error(createThreadError || "无法创建对话 ID");
     }
     await agentChatStream(getChatApiCtx(), {
       query: text,

@@ -38,6 +38,25 @@ function logSse(requestId, stage, detail = {}) {
   console.log(`[Chatbot][SSE][${requestId}] ${stage}`, detail);
 }
 
+function pickThreadId(data) {
+  const sources = [
+    data,
+    data?.data,
+    data?.result,
+    data?.thread,
+    data?.conversation,
+  ];
+  const keys = ["id", "thread_id", "threadId", "conversation_id", "conversationId"];
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const key of keys) {
+      const value = String(source[key] || "").trim();
+      if (value) return value;
+    }
+  }
+  return "";
+}
+
 /**
  * 调用本地代理创建上游线程，并返回线程 ID。
  *
@@ -71,7 +90,7 @@ export async function createAgentThread(ctx, title) {
   }
 
   const data = await res.json().catch(() => ({}));
-  const threadId = String(data?.id || "");
+  const threadId = pickThreadId(data);
   if (!threadId) {
     throw new Error("创建对话失败：上游未返回对话 ID");
   }
