@@ -259,6 +259,8 @@ async function exitH5Page(onAttempt) {
 
   if (isAndroid) {
     const directMethods = [
+      "jsOnBackPressed",
+      "onBack",
       "closeWebView",
       "closeWebview",
       "closeWindow",
@@ -284,7 +286,7 @@ async function exitH5Page(onAttempt) {
       }
     }
     if (window.androidMethod && typeof window.androidMethod.sendCommand === "function") {
-      const commands = ["closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
+      const commands = ["jsOnBackPressed", "onBack", "closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
       for (const command of commands) {
         try {
           reportExitAttempt(onAttempt, { channel: "androidSendCommand", method: command, stage: "before" });
