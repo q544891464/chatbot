@@ -1,4 +1,4 @@
-const http = require("node:http");
+﻿const http = require("node:http");
 const path = require("node:path");
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
@@ -245,6 +245,20 @@ function getFeedbackUrl(messageId) {
   return `${FEEDBACK_BASE_URL}/api/chat/message/${encodeURIComponent(
     trimmed,
   )}/feedback`;
+}
+
+function sendFeedbackAcceptedFallback(res, detail) {
+  appendJsonLog(SERVER_LOG_PREFIX, {
+    ts: new Date().toISOString(),
+    event: "feedback:accepted-fallback",
+    ...detail,
+  });
+  sendJson(res, 202, {
+    ok: true,
+    persisted: false,
+    source: "feedback-fallback",
+    message: "Feedback accepted locally; upstream feedback service is unavailable.",
+  });
 }
 
 /**
@@ -2195,29 +2209,89 @@ async function handleFeedback(req, res) {
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
+    sendFeedbackAcceptedFallback(res, {
+      reason: "auth-error",
+      originalMessageId,
+      rating,
+      payload,
+      error: String(err?.message || err || ""),
+    });
     return;
   }
 
   const cookieHeader = String(req.headers.cookie || "");
-  const messageId = await resolveFeedbackMessageId(originalMessageId, token, cookieHeader);
+  let messageId = "";
+  try {
+    messageId = await resolveFeedbackMessageId(originalMessageId, token, cookieHeader);
+  } catch (err) {
+    sendFeedbackAcceptedFallback(res, {
+      reason: "message-id-resolve-error",
+      originalMessageId,
+      rating,
+      payload,
+      error: String(err?.message || err || ""),
+    });
+    return;
+  }
+  if (!isIntegerMessageId(messageId)) {
+    sendFeedbackAcceptedFallback(res, {
+      reason: "message-id-unresolved",
+      messageId,
+      originalMessageId,
+      rating,
+      payload,
+    });
+    return;
+  }
+
   const feedbackUrl = getFeedbackUrl(messageId);
   if (!feedbackUrl) {
     sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
     return;
   }
-  const upstreamRes = await fetch(feedbackUrl, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-    },
-    body: JSON.stringify(payload),
-  });
+  let upstreamRes;
+  try {
+    upstreamRes = await safeFetch(
+      feedbackUrl,
+      {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        },
+        body: JSON.stringify(payload),
+      },
+      "ALT feedback service",
+    );
+  } catch (err) {
+    sendFeedbackAcceptedFallback(res, {
+      reason: "upstream-unreachable",
+      feedbackUrl,
+      messageId,
+      originalMessageId,
+      rating,
+      payload,
+      error: String(err?.message || err || ""),
+    });
+    return;
+  }
 
   const text = await upstreamRes.text().catch(() => "");
+  if (upstreamRes.status === 409) {
+    appendJsonLog(SERVER_LOG_PREFIX, {
+      ts: new Date().toISOString(),
+      event: "feedback:duplicate",
+      feedbackUrl,
+      messageId,
+      originalMessageId,
+      rating,
+      responseText: text,
+    });
+    sendJson(res, 200, { ok: true, persisted: true, duplicate: true });
+    return;
+  }
   if (!upstreamRes.ok) {
     appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
@@ -2230,6 +2304,19 @@ async function handleFeedback(req, res) {
       payload,
       responseText: text,
     });
+    if (upstreamRes.status >= 500) {
+      sendFeedbackAcceptedFallback(res, {
+        reason: "upstream-error",
+        feedbackUrl,
+        status: upstreamRes.status,
+        messageId,
+        originalMessageId,
+        rating,
+        payload,
+        responseText: text,
+      });
+      return;
+    }
     sendJson(res, upstreamRes.status, formatUpstreamError("反馈上游", upstreamRes.status, text));
     return;
   }
@@ -2261,28 +2348,82 @@ async function handleFeedbackStatus(req, res, messageId) {
   try {
     token = await getAltAuthToken();
   } catch (err) {
-    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
+    appendJsonLog(SERVER_LOG_PREFIX, {
+      ts: new Date().toISOString(),
+      event: "feedback:status:auth-error",
+      originalMessageId,
+      error: String(err?.message || err || ""),
+    });
+    sendJson(res, 200, { has_feedback: false, feedback: null, upstreamUnavailable: true });
     return;
   }
 
   const cookieHeader = String(req.headers.cookie || "");
-  const trimmedId = await resolveFeedbackMessageId(originalMessageId, token, cookieHeader);
+  let trimmedId = "";
+  try {
+    trimmedId = await resolveFeedbackMessageId(originalMessageId, token, cookieHeader);
+  } catch (err) {
+    appendJsonLog(SERVER_LOG_PREFIX, {
+      ts: new Date().toISOString(),
+      event: "feedback:status:resolve-error",
+      originalMessageId,
+      error: String(err?.message || err || ""),
+    });
+    sendJson(res, 200, { has_feedback: false, feedback: null, upstreamUnavailable: true });
+    return;
+  }
+  if (!isIntegerMessageId(trimmedId)) {
+    sendJson(res, 200, { has_feedback: false, feedback: null, unresolvedMessageId: true });
+    return;
+  }
+
   const feedbackUrl = getFeedbackUrl(trimmedId);
   if (!feedbackUrl) {
     sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
     return;
   }
-  const upstreamRes = await fetch(feedbackUrl, {
-    method: "GET",
-    headers: {
-      accept: "application/json",
-      Authorization: `Bearer ${token}`,
-      ...(cookieHeader ? { Cookie: cookieHeader } : {}),
-    },
-  });
+  let upstreamRes;
+  try {
+    upstreamRes = await safeFetch(
+      feedbackUrl,
+      {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          Authorization: `Bearer ${token}`,
+          ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+        },
+      },
+      "ALT feedback status service",
+    );
+  } catch (err) {
+    appendJsonLog(SERVER_LOG_PREFIX, {
+      ts: new Date().toISOString(),
+      event: "feedback:status:upstream-unreachable",
+      feedbackUrl,
+      originalMessageId,
+      trimmedId,
+      error: String(err?.message || err || ""),
+    });
+    sendJson(res, 200, { has_feedback: false, feedback: null, upstreamUnavailable: true });
+    return;
+  }
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
+    appendJsonLog(SERVER_LOG_PREFIX, {
+      ts: new Date().toISOString(),
+      event: "feedback:status:error",
+      feedbackUrl,
+      originalMessageId,
+      trimmedId,
+      status: upstreamRes.status,
+      responseText: text,
+    });
+    if (upstreamRes.status >= 500) {
+      sendJson(res, 200, { has_feedback: false, feedback: null, upstreamUnavailable: true });
+      return;
+    }
     sendJson(res, upstreamRes.status, formatUpstreamError("反馈状态上游", upstreamRes.status, text));
     return;
   }
