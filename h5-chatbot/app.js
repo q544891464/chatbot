@@ -53,20 +53,10 @@ const el = {
   sendBtn: document.getElementById("sendBtn"),
   stopBtn: document.getElementById("stopBtn"),
   tips: document.getElementById("tips"),
-  settingsBtn: document.getElementById("settingsBtn"),
+  backBtn: document.getElementById("backBtn"),
   newChatBtn: document.getElementById("newChatBtn"),
   scrollBtn: document.getElementById("scrollBtn"),
   chatListBtn: document.getElementById("chatListBtn"),
-  modal: document.getElementById("settingsModal"),
-  backdrop: document.getElementById("settingsBackdrop"),
-  closeSettingsBtn: document.getElementById("closeSettingsBtn"),
-  settingsForm: document.getElementById("settingsForm"),
-  baseUrl: document.getElementById("baseUrl"),
-  apiKey: document.getElementById("apiKey"),
-  userId: document.getElementById("userId"),
-  responseMode: document.getElementById("responseMode"),
-  resetConversationBtn: document.getElementById("resetConversationBtn"),
-  clearChatBtn: document.getElementById("clearChatBtn"),
   chatListModal: document.getElementById("chatListModal"),
   chatListBackdrop: document.getElementById("chatListBackdrop"),
   closeChatListBtn: document.getElementById("closeChatListBtn"),
@@ -79,13 +69,9 @@ const el = {
   feedbackSubmitBtn: document.getElementById("feedbackSubmitBtn"),
   feedbackInput: document.getElementById("feedbackInput"),
   feedbackHint: document.getElementById("feedbackHint"),
-  platform: document.getElementById("platform"),
-  apiKeyField: document.getElementById("apiKeyField"),
-  responseModeField: document.getElementById("responseModeField"),
   userInfoName: document.getElementById("userInfoName"),
   userInfoPhone: document.getElementById("userInfoPhone"),
   userInfoOrg: document.getElementById("userInfoOrg"),
-  authStartBtn: document.getElementById("authStartBtn"),
   authCodeValue: document.getElementById("authCodeValue"),
   authStateValue: document.getElementById("authStateValue"),
   authAccessTokenValue: document.getElementById("authAccessTokenValue"),
@@ -993,61 +979,8 @@ function renderAll() {
   }
   scrollToBottom(el.messages);
 }
-/**
- * 打开设置面板并同步当前配置到表单。
- */
-function openSettings() {
-  closeChatList();
-  if (el.baseUrl) el.baseUrl.value = state.config.baseUrl;
-  if (el.apiKey) el.apiKey.value = state.config.apiKey;
-  if (el.userId) el.userId.value = state.config.userId;
-  if (el.responseMode) el.responseMode.value = state.config.responseMode;
-  if (el.platform) el.platform.value = "agent";
-  updatePlatformUI();
-  updateUserInfoDisplay();
-  updateAuthDisplay(getAuthCtx());
-  el.modal.setAttribute("aria-hidden", "false");
-  setTimeout(() => el.userId?.focus(), 0);
-}
-/**
- * 关闭设置面板。
- */
 function closeSettings() {
-  el.modal.setAttribute("aria-hidden", "true");
-}
-/**
- * 切换开发者设置按钮的显示状态。
- *
- * @param {boolean} visible 是否显示设置按钮。
- */
-function toggleDevSettingsButton(visible) {
-  document.body.classList.toggle("dev-settings-visible", Boolean(visible));
-}
-
-const devToolsBaseline = {
-  widthGap: Math.abs(window.outerWidth - window.innerWidth),
-  heightGap: Math.abs(window.outerHeight - window.innerHeight),
-};
-/**
- * 在浏览器开发者工具打开时显示调试设置入口。
- */
-function updateDevSettingsVisibility() {
-  const threshold = 140;
-  const widthGap = Math.abs(window.outerWidth - window.innerWidth);
-  const heightGap = Math.abs(window.outerHeight - window.innerHeight);
-  const widthDelta = widthGap - devToolsBaseline.widthGap;
-  const heightDelta = heightGap - devToolsBaseline.heightGap;
-  if (widthDelta > threshold || heightDelta > threshold) {
-    toggleDevSettingsButton(true);
-  }
-}
-
-function isDevToolsShortcut(e) {
-  const key = String(e.key || "").toLowerCase();
-  return (
-    key === "f12" ||
-    (e.ctrlKey && e.shiftKey && ["i", "j", "c"].includes(key))
-  );
+  // Settings UI is intentionally disabled in production.
 }
 /**
  * 根据输入内容动态调整文本域高度。
@@ -1056,26 +989,6 @@ function updateTextareaHeight() {
   el.input.style.height = "auto";
   el.input.style.height = `${Math.min(el.input.scrollHeight, window.innerHeight * 0.4)}
 px`;
-}
-/**
- * 刷新设置面板中的平台相关控件状态。
- */
-function updatePlatformUI() {
-  if (el.platform) {
-    el.platform.value = "agent";
-  }
-  if (el.apiKeyField) {
-    el.apiKeyField.style.display = "none";
-  }
-  if (el.responseModeField) {
-    el.responseModeField.style.display = "none";
-  }
-  if (el.baseUrl) {
-    const base = normalizeBaseUrl(el.baseUrl.value);
-    if (!isProxyBaseUrl(base)) {
-      el.baseUrl.value = getDefaultProxyBaseUrl();
-    }
-  }
 }
 const imageViewerState = { scale: 1, baseScale: 1, startDist: 0 };
 /**
@@ -1340,8 +1253,7 @@ async function sendMessage() {
   state.promptSelection = { pending: false, value: "" };
   clearFollowupSuggestions();
   if (!isConfigured(state.config)) {
-    setTips("请先在“设置”里填写配置。");
-    openSettings();
+    setTips("服务配置不可用，请联系管理员检查后端配置。");
     return;
   }
   setTips("");
@@ -1587,9 +1499,22 @@ function newChat() {
   renderAll();
   updateScrollButton();
   updateConversationList();
-} // Events
+}
+
+function goBack() {
+  flushLocalConversationSave();
+  if (window.history.length > 1) {
+    window.history.back();
+    return;
+  }
+  window.close();
+  setTips("当前没有可返回的上一页。");
+}
+
+// Events
 el.sendBtn.addEventListener("click", sendMessage);
 el.stopBtn.addEventListener("click", stopGeneration);
+el.backBtn?.addEventListener("click", goBack);
 el.newChatBtn.addEventListener("click", newChat);
 el.scrollBtn.addEventListener("click", () => {
   scrollToBottom(el.messages);
@@ -1612,10 +1537,6 @@ el.input.addEventListener("keydown", (e) => {
     sendMessage();
   }
 });
-el.settingsBtn.addEventListener("click", openSettings);
-el.authStartBtn?.addEventListener("click", () => startAuthFlow(getAuthCtx()));
-el.closeSettingsBtn.addEventListener("click", closeSettings);
-el.backdrop.addEventListener("click", closeSettings);
 el.feedbackBackdrop?.addEventListener("click", () =>
   closeFeedbackModal(el, feedbackState, null),
 );
@@ -1632,9 +1553,6 @@ el.feedbackInput?.addEventListener("input", () => {
   resetFeedbackHint(el, "请简要说明原因，便于改进。", false);
 });
 document.addEventListener("keydown", (e) => {
-  if (isDevToolsShortcut(e)) {
-    toggleDevSettingsButton(true);
-  }
   if (e.key === "Escape") {
     closeSettings();
     closeChatList();
@@ -1646,41 +1564,11 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     updateScrollButton();
-    updateDevSettingsVisibility();
   } else {
     flushLocalConversationSave();
   }
 });
 window.addEventListener("pagehide", flushLocalConversationSave);
-window.addEventListener("resize", updateDevSettingsVisibility, { passive: true });
-setInterval(updateDevSettingsVisibility, 1000);
-el.settingsForm.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const cfg = {
-    baseUrl: el.baseUrl?.value || getDefaultProxyBaseUrl(),
-    apiKey: el.apiKey?.value || "",
-    userId: el.userId?.value || randomId("user"),
-    responseMode: el.responseMode?.value || "streaming",
-    platform: el.platform?.value || "agent",
-  };
-  const platform = "agent";
-  const baseUrl = normalizeBaseUrl(cfg.baseUrl);
-  const finalBaseUrl = !isProxyBaseUrl(baseUrl) ? getDefaultProxyBaseUrl() : baseUrl;
-  state.config = {
-    baseUrl: finalBaseUrl,
-    apiKey: String(cfg.apiKey || "").trim(),
-    userId: String(cfg.userId || "").trim(),
-    responseMode: "streaming",
-    platform,
-  };
-  saveConfig(state.config);
-  setConnHint();
-  setTips(isConfigured(state.config) ? "已保存。" : "请补全配置。");
-  closeSettings();
-});
-el.resetConversationBtn.addEventListener("click", resetConversation);
-el.clearChatBtn.addEventListener("click", clearChatWithConfirm);
-el.platform.addEventListener("change", updatePlatformUI);
 el.imageViewerBackdrop.addEventListener("click", closeImageViewer);
 el.imageViewerContent.addEventListener("click", (e) => {
   if (e.target === el.imageViewerContent) closeImageViewer();
@@ -1744,12 +1632,6 @@ if (IS_MOBILE) {
 } else {
   el.input.setAttribute("enterkeyhint", "send");
 }
-window.showDevSettings = () => {
-  toggleDevSettingsButton(true);
-};
-window.hideDevSettings = () => {
-  toggleDevSettingsButton(false);
-};
 /**
  * 页面启动入口，负责初始化用户、认证、会话和界面状态。
  *
@@ -1785,8 +1667,7 @@ async function bootstrap() {
   setAccessDenied(false);
   await initConversations();
   if (!isConfigured(state.config)) {
-    // first visit: guide to settings quickly
-    setTimeout(openSettings, 200);
+    setTips("服务配置不可用，请联系管理员检查后端配置。");
   }
 }
 bootstrap();

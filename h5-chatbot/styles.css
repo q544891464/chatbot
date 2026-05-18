@@ -88,7 +88,7 @@ body::after{
   height: var(--topbar-h);
   z-index: 20;
   display:grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: auto 1fr auto;
   align-items:center;
   gap: 8px;
   padding: 0 10px 0 12px;
@@ -110,7 +110,9 @@ body::after{
   mask: linear-gradient(#000, transparent 70%);
 }
 .topbar__side{
-  display:none;
+  display:flex;
+  align-items:center;
+  justify-content:flex-start;
 }
 .topbar__center{
   display:flex;
@@ -164,13 +166,6 @@ body::after{
   gap:8px;
   justify-self:end;
 }
-.topbar__actions #settingsBtn{
-  display:none;
-}
-body.dev-settings-visible .topbar__actions #settingsBtn{
-  display:inline-flex;
-}
-
 .iconbtn{
   border: 1px solid rgba(148,163,184,0.22);
   background: rgba(255,255,255,0.76);
@@ -1015,7 +1010,7 @@ body.dev-settings-visible .topbar__actions #settingsBtn{
   .topbar{
     left: 24px;
     right: 24px;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: auto 1fr auto;
     padding: 0 14px;
   }
   .topbar__name{
