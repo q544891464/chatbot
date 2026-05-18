@@ -401,6 +401,11 @@ let composerObserver = null;
 let composerHeightRaf = 0;
 let localPersistTimer = 0;
 const feedbackState = initFeedbackState();
+const viewportState = {
+  width: 0,
+  height: 0,
+  orientation: "",
+};
 const IS_MOBILE = (() => {
   const ua = navigator.userAgent || "";
   const touch = navigator.maxTouchPoints || 0;
@@ -1120,13 +1125,35 @@ function closeVideoViewer() {
 /**
  * 根据当前视口高度更新页面 CSS 变量。
  */
-function updateVhVar() {
-  const h = window.visualViewport?.height || window.innerHeight;
-  document.documentElement.style.setProperty(
-    "--vh",
-    `${h * 0.01}
-px`,
-  );
+function getViewportOrientation(width, height) {
+  return width > height ? "landscape" : "portrait";
+}
+
+function updateVhVar(options = {}) {
+  const force = Boolean(options.force);
+  const width = Math.round(window.innerWidth || document.documentElement.clientWidth || 0);
+  const height = Math.round(window.innerHeight || document.documentElement.clientHeight || 0);
+  const orientation = getViewportOrientation(width, height);
+  const widthChanged = Math.abs(width - viewportState.width) > 8;
+  const orientationChanged = orientation !== viewportState.orientation;
+  const largeHeightChanged = Math.abs(height - viewportState.height) > 180;
+
+  if (!height) return;
+  if (
+    !force &&
+    viewportState.height &&
+    !widthChanged &&
+    !orientationChanged &&
+    !largeHeightChanged
+  ) {
+    return;
+  }
+
+  viewportState.width = width;
+  viewportState.height = height;
+  viewportState.orientation = orientation;
+  document.documentElement.style.setProperty("--vh", `${height * 0.01}px`);
+  document.documentElement.style.setProperty("--app-height", `${height}px`);
 }
 /**
  * 组合当前用户元信息，供线程创建和聊天接口使用。
@@ -1599,6 +1626,16 @@ document.addEventListener("visibilitychange", () => {
     flushLocalConversationSave();
   }
 });
+document.addEventListener(
+  "touchmove",
+  (e) => {
+    if (e.target instanceof Element && e.target.closest(".messages, .modal__sheet, .lightbox__content")) {
+      return;
+    }
+    e.preventDefault();
+  },
+  { passive: false },
+);
 window.addEventListener("pagehide", flushLocalConversationSave);
 el.imageViewerBackdrop.addEventListener("click", closeImageViewer);
 el.imageViewerContent.addEventListener("click", (e) => {
@@ -1654,9 +1691,11 @@ el.imageViewerImg.addEventListener("touchend", () => {
   if (imageViewerState.scale < 1) setImageScale(1);
   if (imageViewerState.scale > 3) setImageScale(3);
 }); // Init
-updateVhVar();
-window.visualViewport?.addEventListener("resize", updateVhVar);
-window.addEventListener("resize", updateVhVar);
+updateVhVar({ force: true });
+window.addEventListener("resize", () => updateVhVar());
+window.addEventListener("orientationchange", () => {
+  window.setTimeout(() => updateVhVar({ force: true }), 250);
+});
 el.input.placeholder = "询问任何问题";
 if (IS_MOBILE) {
   el.input.setAttribute("enterkeyhint", "done");
