@@ -133,35 +133,100 @@ async function getLoginUserInfo() {
   return null;
 }
 
+function waitForPageHidden(timeout = 500) {
+  return new Promise((resolve) => {
+    window.setTimeout(() => resolve(document.hidden), timeout);
+  });
+}
+
+function postCloseScheme(url) {
+  const iframe = document.createElement("iframe");
+  iframe.style.display = "none";
+  iframe.src = url;
+  document.body.appendChild(iframe);
+  window.setTimeout(() => iframe.remove(), 800);
+}
+
 async function exitH5Page() {
+  if (window.WeixinJSBridge && typeof window.WeixinJSBridge.call === "function") {
+    try {
+      window.WeixinJSBridge.call("closeWindow");
+      if (await waitForPageHidden()) return true;
+    } catch {
+      // fallback below
+    }
+  }
+
+  if (window.AlipayJSBridge && typeof window.AlipayJSBridge.call === "function") {
+    try {
+      window.AlipayJSBridge.call("closeWebview");
+      if (await waitForPageHidden()) return true;
+    } catch {
+      // fallback below
+    }
+  }
+
   if (isAndroid) {
-    const directMethods = ["closeWebView", "closeWebview", "finish", "goBack", "exit"];
+    const directMethods = [
+      "closeWebView",
+      "closeWebview",
+      "closeWindow",
+      "close",
+      "finish",
+      "goBack",
+      "back",
+      "exit",
+      "exitH5",
+    ];
     for (const method of directMethods) {
       if (window.androidMethod && typeof window.androidMethod[method] === "function") {
         try {
           window.androidMethod[method]();
-          return true;
+          if (await waitForPageHidden()) return true;
         } catch {
           // try next method
         }
       }
     }
     if (window.androidMethod && typeof window.androidMethod.sendCommand === "function") {
-      try {
-        window.androidMethod.sendCommand(JSON.stringify({ command: "closeWebView", params: {} }));
-        return true;
-      } catch {
-        // fallback below
+      const commands = ["closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
+      for (const command of commands) {
+        try {
+          window.androidMethod.sendCommand(JSON.stringify({ command, params: {} }));
+          if (await waitForPageHidden()) return true;
+        } catch {
+          // try next command
+        }
       }
     }
   }
 
   if (isIos && window.iOSMethodBridge && typeof window.iOSMethodBridge.postMessage === "function") {
+    const apis = ["closeWebView", "closeWebview", "closeWindow", "close", "finish", "goBack", "back", "exit", "exitH5"];
+    for (const api of apis) {
+      try {
+        window.iOSMethodBridge.postMessage(JSON.stringify({ api, data: {} }));
+        if (await waitForPageHidden()) return true;
+      } catch {
+        // try next api
+      }
+    }
+  }
+
+  const schemes = [
+    "jsbridge://close",
+    "jsbridge://closeWebView",
+    "app://close",
+    "app://closeWebView",
+    "native://close",
+    "native://closeWebView",
+  ];
+  for (const scheme of schemes) {
     try {
-      window.iOSMethodBridge.postMessage(JSON.stringify({ api: "closeWebView", data: {} }));
-      return true;
+      postCloseScheme(scheme);
+      if (await waitForPageHidden(300)) return true;
     } catch {
-      // fallback below
+      // try next scheme
     }
   }
 

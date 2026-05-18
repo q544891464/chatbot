@@ -1511,6 +1511,10 @@ async function goBack() {
   window.close();
   window.setTimeout(() => {
     if (!document.hidden) {
+      if (window.history.length > 1) {
+        window.history.back();
+        return;
+      }
       setTips("当前客户端不支持直接退出，请使用系统返回键关闭页面。");
     }
   }, 300);
