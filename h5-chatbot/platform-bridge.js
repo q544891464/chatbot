@@ -133,4 +133,39 @@ async function getLoginUserInfo() {
   return null;
 }
 
-export { isAndroid, isIos, isApp, callApp, getLoginUserInfo };
+async function exitH5Page() {
+  if (isAndroid) {
+    const directMethods = ["closeWebView", "closeWebview", "finish", "goBack", "exit"];
+    for (const method of directMethods) {
+      if (window.androidMethod && typeof window.androidMethod[method] === "function") {
+        try {
+          window.androidMethod[method]();
+          return true;
+        } catch {
+          // try next method
+        }
+      }
+    }
+    if (window.androidMethod && typeof window.androidMethod.sendCommand === "function") {
+      try {
+        window.androidMethod.sendCommand(JSON.stringify({ command: "closeWebView", params: {} }));
+        return true;
+      } catch {
+        // fallback below
+      }
+    }
+  }
+
+  if (isIos && window.iOSMethodBridge && typeof window.iOSMethodBridge.postMessage === "function") {
+    try {
+      window.iOSMethodBridge.postMessage(JSON.stringify({ api: "closeWebView", data: {} }));
+      return true;
+    } catch {
+      // fallback below
+    }
+  }
+
+  return false;
+}
+
+export { isAndroid, isIos, isApp, callApp, exitH5Page, getLoginUserInfo };

@@ -1,5 +1,6 @@
 ﻿import { getLoginUserInfo } from "./platform-bridge.js";
 import { renderMarkdownLite } from "./markdown.js";
+import { exitH5Page } from "./platform-bridge.js";
 import {
   clampMessages,
   deriveTitleFromMessages,
@@ -1501,14 +1502,18 @@ function newChat() {
   updateConversationList();
 }
 
-function goBack() {
+async function goBack() {
   flushLocalConversationSave();
-  if (window.history.length > 1) {
-    window.history.back();
+  const exited = await exitH5Page();
+  if (exited) {
     return;
   }
   window.close();
-  setTips("当前没有可返回的上一页。");
+  window.setTimeout(() => {
+    if (!document.hidden) {
+      setTips("当前客户端不支持直接退出，请使用系统返回键关闭页面。");
+    }
+  }, 300);
 }
 
 // Events
