@@ -38,6 +38,7 @@ const AUTH_CLIENT_ID = String(process.env.AUTH_CLIENT_ID || "");
 const AUTH_CLIENT_SECRET = String(process.env.AUTH_CLIENT_SECRET || "");
 const AUTH_REDIRECT_URI = String(process.env.AUTH_REDIRECT_URI || "");
 const AUTH_SCOPE = String(process.env.AUTH_SCOPE || "");
+const URL_ENTRY_VERIFY_URL = String(process.env.URL_ENTRY_VERIFY_URL || process.env.AUTH_URL_ENTRY_VERIFY_URL || "");
 
 const pool = mysql.createPool({
   host: DB_HOST,
@@ -2172,6 +2173,112 @@ async function handleAuthUserInfo(req, res) {
   }
 }
 
+function pickVerifiedUserId(userInfo) {
+  if (!userInfo || typeof userInfo !== "object") return "";
+  const candidates = [
+    userInfo.phone,
+    userInfo.phone_number,
+    userInfo.mobile,
+    userInfo.loginId,
+    userInfo.userId,
+    userInfo.useId,
+    userInfo.uid,
+    userInfo.id,
+  ];
+  for (const item of candidates) {
+    const value = String(item || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function unwrapVerifiedUserInfo(data) {
+  if (!data || typeof data !== "object") return null;
+  return data.data?.userInfo || data.data?.user || data.userInfo || data.user || data.data || data;
+}
+
+async function handleUrlEntryUserInfo(req, res) {
+  if (!URL_ENTRY_VERIFY_URL) {
+    sendJson(res, 501, { error: "服务端未配置 URL_ENTRY_VERIFY_URL，无法校验入口凭证" });
+    return;
+  }
+  const body = await readBodyJson(req);
+  const loginId = String(body?.loginId || "").trim();
+  const credential = String(body?.cc || body?.credential || "").trim();
+  const orgId = String(body?.orgId || "").trim();
+  const clientType = String(body?.clientType || "").trim();
+  const appId = String(body?.appId || "").trim();
+  if (!loginId || !credential) {
+    sendJson(res, 400, { error: "缺少 loginId 或 cc，无法校验入口凭证" });
+    return;
+  }
+
+  const upstreamRes = await fetch(URL_ENTRY_VERIFY_URL, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ loginId, cc: credential, orgId, clientType, appId }),
+  });
+  const text = await upstreamRes.text().catch(() => "");
+  let data = null;
+  try {
+    data = JSON.parse(text || "{}");
+  } catch {
+    data = null;
+  }
+  if (!upstreamRes.ok || data?.ok === false || data?.success === false) {
+    appendAuthUserInfoLog({
+      event: "auth:url-entry:error",
+      url: URL_ENTRY_VERIFY_URL,
+      status: upstreamRes.status,
+      loginId,
+      orgId,
+      clientType,
+      appId,
+    });
+    sendJson(res, upstreamRes.ok ? 401 : upstreamRes.status, { error: "入口凭证校验失败" });
+    return;
+  }
+
+  const userInfo = unwrapVerifiedUserInfo(data);
+  const verifiedId = pickVerifiedUserId(userInfo);
+  if (!verifiedId || verifiedId !== loginId) {
+    appendAuthUserInfoLog({
+      event: "auth:url-entry:mismatch",
+      url: URL_ENTRY_VERIFY_URL,
+      status: upstreamRes.status,
+      loginId,
+      verifiedId,
+      orgId,
+      clientType,
+      appId,
+    });
+    sendJson(res, 403, { error: "入口用户信息校验不一致" });
+    return;
+  }
+
+  const safeUserInfo = {
+    ...userInfo,
+    loginId: userInfo.loginId || loginId,
+    orgId: userInfo.orgId || orgId,
+    clientType: userInfo.clientType || clientType,
+    appId: userInfo.appId || appId,
+    authSource: "url-entry",
+  };
+  appendAuthUserInfoLog({
+    event: "auth:url-entry:success",
+    url: URL_ENTRY_VERIFY_URL,
+    status: upstreamRes.status,
+    loginId,
+    orgId,
+    clientType,
+    appId,
+  });
+  sendJson(res, 200, safeUserInfo);
+}
+
 async function handleAuthUserInfoClientLog(req, res) {
   const body = await readBodyJson(req);
   appendAuthUserInfoLog({
@@ -2527,6 +2634,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/auth-userinfo") {        
       await handleAuthUserInfo(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/url-entry-userinfo") {
+      await handleUrlEntryUserInfo(req, res);
       return;
     }
 

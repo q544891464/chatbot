@@ -229,20 +229,32 @@ function logClientEvent(event, data = {}) {
   }).catch(() => {});
 }
 
-function getUrlPlatformUserInfo() {
+function getUrlEntryParams() {
   const params = new URLSearchParams(window.location.search || "");
   const loginId = String(params.get("loginId") || "").trim();
-  if (!loginId) return null;
+  const cc = String(params.get("cc") || "").trim();
+  if (!loginId || !cc) return null;
   return {
-    userId: loginId,
-    phone: loginId,
     loginId,
+    cc,
     orgId: String(params.get("orgId") || "").trim(),
     clientType: String(params.get("clientType") || "").trim(),
     appId: String(params.get("appId") || "").trim(),
-    authSource: "url-entry",
-    hasCredential: Boolean(String(params.get("cc") || "").trim()),
   };
+}
+
+async function fetchUrlEntryUserInfo() {
+  const payload = getUrlEntryParams();
+  if (!payload) return null;
+  const res = await fetch(`${getStoreBase()}/url-entry-userinfo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(await readResponseError(res, "入口凭证校验失败"));
+  }
+  return res.json().catch(() => null);
 }
 
 function hasAuthenticatedUserInfo() {
@@ -436,7 +448,7 @@ const IS_MOBILE = (() => {
  */
 async function initPlatformUser() {
   try {
-    const userInfo = (await getLoginUserInfo()) || getUrlPlatformUserInfo();
+    const userInfo = (await getLoginUserInfo()) || (await fetchUrlEntryUserInfo());
     state.platformUser = userInfo || null;
     logAuthUserInfo(userInfo?.authSource === "url-entry" ? "url-entry" : "platform-bridge", userInfo);
     const userId = pickPlatformUserId(userInfo);
