@@ -229,6 +229,22 @@ function logClientEvent(event, data = {}) {
   }).catch(() => {});
 }
 
+function getUrlPlatformUserInfo() {
+  const params = new URLSearchParams(window.location.search || "");
+  const loginId = String(params.get("loginId") || "").trim();
+  if (!loginId) return null;
+  return {
+    userId: loginId,
+    phone: loginId,
+    loginId,
+    orgId: String(params.get("orgId") || "").trim(),
+    clientType: String(params.get("clientType") || "").trim(),
+    appId: String(params.get("appId") || "").trim(),
+    authSource: "url-entry",
+    hasCredential: Boolean(String(params.get("cc") || "").trim()),
+  };
+}
+
 function hasAuthenticatedUserInfo() {
   const info = state.platformUser;
   if (!info || typeof info !== "object") return false;
@@ -420,9 +436,9 @@ const IS_MOBILE = (() => {
  */
 async function initPlatformUser() {
   try {
-    const userInfo = await getLoginUserInfo();
+    const userInfo = (await getLoginUserInfo()) || getUrlPlatformUserInfo();
     state.platformUser = userInfo || null;
-    logAuthUserInfo("platform-bridge", userInfo);
+    logAuthUserInfo(userInfo?.authSource === "url-entry" ? "url-entry" : "platform-bridge", userInfo);
     const userId = pickPlatformUserId(userInfo);
     if (!userId) return false;
     if (userId !== state.config.userId) {

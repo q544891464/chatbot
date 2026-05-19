@@ -139,6 +139,7 @@ export function pickPlatformUserId(userInfo) {
     userInfo.phone,
     userInfo.phone_number,
     userInfo.mobile,
+    userInfo.loginId,
     userInfo.userId,
     userInfo.useId,
     userInfo.uid,

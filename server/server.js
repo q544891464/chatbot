@@ -55,6 +55,7 @@ const LOG_DIR = path.resolve(__dirname, "logs");
 const MESSAGE_LOG_PREFIX = "message";
 const SERVER_LOG_PREFIX = "server";
 const EMPTY_ALT_ANSWER = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
+const ALT_RPM_RATE_LIMIT_ANSWER = "会话内容达到模型每分钟限制，请稍侯继续提问";
 const ALT_RATE_LIMIT_ANSWER = "当前模型请求过于频繁或上下文过长，已触发上游限流。请稍后重试，或新建对话/缩短问题后再试。";
 
 /**
@@ -342,14 +343,26 @@ function formatStatusLabel(status) {
 function isAltRateLimitError(text, status = 0) {
   const raw = String(text || "");
   if (status === 429) return true;
-  return /USER_TPM_RATELIMITING|RateLimitError|TPM\s*超限|tokens?\s*后重试|too many requests|rate limit/i.test(raw);
+  return /USER_[TR]PM_RATELIMITING|RateLimitError|[TR]PM\s*超限|tokens?\s*后重试|too many requests|rate limit|requests?\s+per\s+minute/i.test(raw);
+}
+
+function isAltRpmRateLimitError(text) {
+  const raw = String(text || "");
+  return /USER_RPM_RATELIMITING|RPM\s*超限|requests?\s+per\s+minute|request\s+rate|每分钟/i.test(raw);
+}
+
+function getAltRateLimitAnswer(text, status = 0) {
+  if (isAltRpmRateLimitError(text)) return ALT_RPM_RATE_LIMIT_ANSWER;
+  if (isAltRateLimitError(text, status)) return ALT_RATE_LIMIT_ANSWER;
+  return "";
 }
 
 function formatUpstreamError(source, status, raw, extra = {}) {
   const detail = extractErrorDetail(raw);
-  if (isAltRateLimitError(`${detail}\n${raw}`, status)) {
+  const rateLimitAnswer = getAltRateLimitAnswer(`${detail}\n${raw}`, status);
+  if (rateLimitAnswer) {
     return {
-      error: ALT_RATE_LIMIT_ANSWER,
+      error: rateLimitAnswer,
       source,
       status,
       ...extra,
@@ -1035,7 +1048,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
  * @returns {string} 提取到的答案文本。
  */
 function extractAltAnswer(data) {
-  if (typeof data === "string") return isAltRateLimitError(data) ? ALT_RATE_LIMIT_ANSWER : data;
+  if (typeof data === "string") return getAltRateLimitAnswer(data) || data;
   if (!data || typeof data !== "object") return "";
   const errorText = extractAltError(data);
   if (errorText) return errorText;
@@ -1062,7 +1075,8 @@ function extractAltAnswer(data) {
   for (const item of candidates) {
     if (typeof item === "string" && item.trim()) {
       const cleaned = filterAltText({ toolBlock: false, toolDump: false }, item);
-      if (isAltRateLimitError(cleaned)) return ALT_RATE_LIMIT_ANSWER;
+      const rateLimitAnswer = getAltRateLimitAnswer(cleaned);
+      if (rateLimitAnswer) return rateLimitAnswer;
       if (cleaned.trim()) return cleaned;
     }
   }
@@ -1088,9 +1102,8 @@ function extractAltError(data) {
     data.msg?.error ||
     data.error?.message ||
     data.error?.msg;
-  if (isAltRateLimitError(msg, Number(data.status_code || data.code || data.error?.code || 0))) {
-    return ALT_RATE_LIMIT_ANSWER;
-  }
+  const rateLimitAnswer = getAltRateLimitAnswer(msg, Number(data.status_code || data.code || data.error?.code || 0));
+  if (rateLimitAnswer) return rateLimitAnswer;
   return typeof msg === "string" ? msg.trim() : "";
 }
 
@@ -1683,7 +1696,8 @@ function extractAltChunk(payload) {
   const response = typeof payload.response === "string" ? payload.response : "";
   if (payload.response === null && msgContent === "") return null;
   const raw = msgContent !== "" ? msgContent : response !== "" ? response : "";
-  if (isAltRateLimitError(raw)) return ALT_RATE_LIMIT_ANSWER;
+  const rateLimitAnswer = getAltRateLimitAnswer(raw);
+  if (rateLimitAnswer) return rateLimitAnswer;
   if (raw !== "") return raw;
   return null;
 }
