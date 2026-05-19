@@ -43,6 +43,7 @@ const LOCAL_CONVERSATION_KEY = "h5ChatbotConversations:v1";
 const AGENT_ID = "ChatbotAgent";
 const FEEDBACK_ENDPOINT_PATH = "/feedback";
 const EMPTY_ASSISTANT_FALLBACK = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
+const REQUIRE_AUTH_USER = false;
 const DEFAULT_USER_META = {
   userName: "test",
   org: "org1",
@@ -1742,7 +1743,7 @@ async function bootstrap() {
   updateConversationList();
   updateUserInfoDisplay();
   updateAuthDisplay(getAuthCtx());
-  if (!hasAuthCode) {
+  if (REQUIRE_AUTH_USER && !hasAuthCode) {
     const result = await tryLoginWithStoredToken(getAuthCtx());
     if (result.needsAuth) {
       setTips("认证失效，正在重新认证...");
@@ -1750,7 +1751,7 @@ async function bootstrap() {
       return;
     }
   }
-  if (!hasAuthenticatedUserInfo()) {
+  if (REQUIRE_AUTH_USER && !hasAuthenticatedUserInfo()) {
     setAccessDenied(true);
     setTips("未获取到登录用户信息，请从已登录的工作平台入口进入。");
     renderAll();

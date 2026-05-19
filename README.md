@@ -695,6 +695,111 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 ./server/start.sh
 ```
 
+## 内网离线部署脚本
+
+内网环境不能访问 GitHub 时，可以使用离线包部署脚本：
+
+- [build-offline-bundle.sh](scripts/build-offline-bundle.sh)：在有网机器或构建机上生成离线包
+- [deploy-offline-bundle.sh](scripts/deploy-offline-bundle.sh)：在内网服务器上解包、安装 systemd 服务并启动
+
+### 1. 在有网机器生成离线包
+
+建议在和内网服务器系统架构一致的 Linux 机器上打包，避免 `node_modules` 平台不一致。
+
+```bash
+cd /home/chatbot/chatbot
+bash scripts/build-offline-bundle.sh
+```
+
+默认会执行：
+
+```bash
+npm ci --omit=dev
+```
+
+并生成：
+
+```text
+dist/offline/chatbot-offline-<commit>-<time>.tar.gz
+```
+
+默认不会打包 `.env`，避免把生产密钥放进离线包。如果确实要一起打包环境配置，可显式执行：
+
+```bash
+INCLUDE_ENV=1 bash scripts/build-offline-bundle.sh
+```
+
+### 2. 把离线包拷贝到内网服务器
+
+例如：
+
+```bash
+scp dist/offline/chatbot-offline-*.tar.gz root@内网服务器:/tmp/
+```
+
+内网不通外网时，也可以用 U 盘、堡垒机文件上传等方式传入。
+
+### 3. 在内网服务器部署
+
+服务器需要预先安装 Node.js 18+。如果离线包里已经包含 `node_modules`，内网服务器不需要访问 npm。
+
+```bash
+sudo APP_DIR=/home/chatbot/chatbot \
+  SERVICE_NAME=chatbot \
+  bash /home/chatbot/chatbot/scripts/deploy-offline-bundle.sh /tmp/chatbot-offline-xxx.tar.gz
+```
+
+如果脚本还不在服务器上，也可以先解出离线包，再执行包内脚本：
+
+```bash
+cd /tmp
+tar -xzf chatbot-offline-xxx.tar.gz
+sudo APP_DIR=/home/chatbot/chatbot \
+  bash chatbot-offline-xxx/scripts/deploy-offline-bundle.sh /tmp/chatbot-offline-xxx.tar.gz
+```
+
+部署脚本会：
+
+- 备份已有目录为 `/home/chatbot/chatbot.bak.<时间>`
+- 安装新版本到 `/home/chatbot/chatbot`
+- 写入 `/etc/systemd/system/chatbot.service`
+- 执行 `systemctl daemon-reload`
+- 设置开机自启
+- 重启服务
+- 检查 `http://127.0.0.1:8787/api/health`
+
+### 4. 内网服务器准备 `.env`
+
+如果离线包不包含 `.env`，部署后在服务器创建：
+
+```bash
+cd /home/chatbot/chatbot
+cp server/.env.example .env
+vi .env
+```
+
+然后重启：
+
+```bash
+sudo systemctl restart chatbot
+sudo journalctl -u chatbot -f
+```
+
+### 5. 常用参数
+
+```bash
+APP_DIR=/opt/chatbot                 # 安装目录
+SERVICE_NAME=chatbot                 # systemd 服务名
+SERVICE_USER=root                    # systemd 运行用户
+SERVICE_GROUP=root                   # systemd 运行用户组
+RUN_INSTALL=auto                     # auto|1|0，默认 node_modules 存在就不 npm install
+INSTALL_CMD="npm ci --omit=dev"      # 需要安装依赖时使用的命令
+CREATE_SYSTEMD=1                     # 是否写 systemd 服务
+RESTART_SERVICE=1                    # 是否部署后重启服务
+HEALTHCHECK_URL=http://127.0.0.1:8787/api/health
+NODE_BIN=/usr/bin/node               # Node 不在 PATH 时指定
+```
+
 ## 使用说明
 
 ### 页面访问

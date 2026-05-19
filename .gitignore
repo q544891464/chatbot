@@ -4,6 +4,7 @@ node_modules/
 .DS_Store
 server/data/
 server/logs/
+dist/
 .codex_tmp/
 chatbot-server-*.log
 response_*.json
