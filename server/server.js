@@ -38,6 +38,7 @@ const AUTH_CLIENT_ID = String(process.env.AUTH_CLIENT_ID || "");
 const AUTH_CLIENT_SECRET = String(process.env.AUTH_CLIENT_SECRET || "");
 const AUTH_REDIRECT_URI = String(process.env.AUTH_REDIRECT_URI || "");
 const AUTH_SCOPE = String(process.env.AUTH_SCOPE || "");
+const H5_BASE_PATHS = normalizeStaticBasePaths(process.env.H5_BASE_PATHS || process.env.H5_BASE_PATH || "/zhengqi-agent,/zhengqi-ai");
 
 const pool = mysql.createPool({
   host: DB_HOST,
@@ -56,6 +57,27 @@ const MESSAGE_LOG_PREFIX = "message";
 const SERVER_LOG_PREFIX = "server";
 const EMPTY_ALT_ANSWER = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
 const ALT_RATE_LIMIT_ANSWER = "当前模型请求过于频繁或上下文过长，已触发上游限流。请稍后重试，或新建对话/缩短问题后再试。";
+
+function normalizeStaticBasePaths(input) {
+  return String(input || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => {
+      if (item === "/") return "";
+      return `/${item.replace(/^\/+|\/+$/g, "")}`;
+    })
+    .filter((item, index, list) => list.indexOf(item) === index);
+}
+
+function stripStaticBasePath(pathname) {
+  for (const basePath of H5_BASE_PATHS) {
+    if (!basePath) continue;
+    if (pathname === basePath || pathname === `${basePath}/`) return "/index.html";
+    if (pathname.startsWith(`${basePath}/`)) return pathname.slice(basePath.length) || "/";
+  }
+  return pathname;
+}
 
 /**
  * 确保日志目录存在。
@@ -2445,7 +2467,7 @@ async function handleFeedbackStatus(req, res, messageId) {
  */
 async function handleStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
-  let pathname = decodeURIComponent(url.pathname || "/");
+  let pathname = stripStaticBasePath(decodeURIComponent(url.pathname || "/"));
   if (pathname === "/") pathname = "/index.html";
 
   const requested = path.normalize(pathname).replace(/^([/\\])+/, "");

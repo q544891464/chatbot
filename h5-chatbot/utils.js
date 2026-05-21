@@ -106,11 +106,11 @@ export function getDefaultProxyBaseUrl() {
   if (typeof window === "undefined" || !window.location) {
     return "/api";
   }
-  const { protocol, port } = window.location;
+  const { protocol } = window.location;
   if (protocol === "file:") {
     return "http://127.0.0.1:8787/api";
   }
-  if (port === "8787") {
+  if (protocol === "http:" || protocol === "https:") {
     return "/api";
   }
   return "http://127.0.0.1:8787/api";
