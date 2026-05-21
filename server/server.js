@@ -38,7 +38,11 @@ const AUTH_CLIENT_ID = String(process.env.AUTH_CLIENT_ID || "");
 const AUTH_CLIENT_SECRET = String(process.env.AUTH_CLIENT_SECRET || "");
 const AUTH_REDIRECT_URI = String(process.env.AUTH_REDIRECT_URI || "");
 const AUTH_SCOPE = String(process.env.AUTH_SCOPE || "");
-const H5_BASE_PATHS = normalizeStaticBasePaths(process.env.H5_BASE_PATHS || process.env.H5_BASE_PATH || "/zhengqi-agent,/zhengqi-ai");
+const H5_BASE_PATHS = normalizeStaticBasePaths(
+  [process.env.H5_BASE_PATHS, process.env.H5_BASE_PATH, "/zhengqi-agent,/zhengqi-ai"]
+    .filter(Boolean)
+    .join(","),
+);
 
 const pool = mysql.createPool({
   host: DB_HOST,
