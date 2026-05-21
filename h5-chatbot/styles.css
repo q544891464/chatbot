@@ -774,6 +774,10 @@ body::after{
   transition: transform 0.12s ease, background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
   cursor: pointer;
 }
+#voiceBtn,
+#voiceFileInput{
+  display: none !important;
+}
 .composer__voice:hover{
   background: #ffffff;
   color: var(--primary-strong);

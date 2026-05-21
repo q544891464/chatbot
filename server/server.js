@@ -4,6 +4,14 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const mysql = require("mysql2/promise");
 const { Readable } = require("node:stream");
+const {
+  parseDurationMs,
+  safeFetch,
+} = require("./lib/http-utils");
+const { createAltAuthService } = require("./services/alt-auth");
+const { createAiWikiService, isIntegerMessageId } = require("./services/ai-wiki");
+const { createConversationService } = require("./services/conversations");
+const { createApiRouter } = require("./routes/api-router");
 
 const PORT = Number.parseInt(process.env.PORT || "8787", 10);
 const DIFY_BASE_URL = String(process.env.DIFY_BASE_URL || "https://api.dify.ai/v1").replace(/\/+$/, "");
@@ -45,6 +53,20 @@ const AUTH_REDIRECT_URI = String(process.env.AUTH_REDIRECT_URI || "");
 const AUTH_SCOPE = String(process.env.AUTH_SCOPE || "");
 const URL_ENTRY_VERIFY_URL = String(process.env.URL_ENTRY_VERIFY_URL || process.env.AUTH_URL_ENTRY_VERIFY_URL || "");
 
+const DEFAULT_FETCH_TIMEOUT_MS = parseDurationMs(process.env.FETCH_TIMEOUT_MS, 15_000);
+const ALT_AUTH_TIMEOUT_MS = parseDurationMs(process.env.ALT_AUTH_TIMEOUT_MS, 8_000);
+const ALT_THREAD_TIMEOUT_MS = parseDurationMs(process.env.ALT_THREAD_TIMEOUT_MS, 10_000);
+const ALT_CHAT_TIMEOUT_MS = parseDurationMs(process.env.ALT_CHAT_TIMEOUT_MS, 20_000);
+const ALT_STREAM_CONNECT_TIMEOUT_MS = parseDurationMs(process.env.ALT_STREAM_CONNECT_TIMEOUT_MS, 20_000);
+const ALT_FEEDBACK_TIMEOUT_MS = parseDurationMs(process.env.ALT_FEEDBACK_TIMEOUT_MS, 10_000);
+const OAUTH_TIMEOUT_MS = parseDurationMs(process.env.OAUTH_TIMEOUT_MS, 10_000);
+const URL_ENTRY_TIMEOUT_MS = parseDurationMs(process.env.URL_ENTRY_TIMEOUT_MS, 10_000);
+const AUDIO_TO_TEXT_TIMEOUT_MS = parseDurationMs(process.env.AUDIO_TO_TEXT_TIMEOUT_MS, 60_000);
+const ALT_AUTH_FAILURE_COOLDOWN_MS = parseDurationMs(
+  process.env.ALT_AUTH_FAILURE_COOLDOWN_MS,
+  15_000,
+);
+
 const pool = mysql.createPool({
   host: DB_HOST,
   port: DB_PORT,
@@ -55,6 +77,24 @@ const pool = mysql.createPool({
   connectionLimit: DB_CONN_LIMIT,
   queueLimit: 0,
 });
+const altAuthService = createAltAuthService({
+  authUrl: ALT_AUTH_URL,
+  username: ALT_AUTH_USERNAME,
+  password: ALT_AUTH_PASSWORD,
+  scope: ALT_AUTH_SCOPE,
+  clientId: ALT_AUTH_CLIENT_ID,
+  clientSecret: ALT_AUTH_CLIENT_SECRET,
+  staticToken: ALT_API_TOKEN,
+  timeoutMs: ALT_AUTH_TIMEOUT_MS,
+  failureCooldownMs: ALT_AUTH_FAILURE_COOLDOWN_MS,
+});
+const aiWikiService = createAiWikiService({
+  apiUrl: ALT_API_URL,
+  threadUrl: ALT_THREAD_URL,
+  agentId: ALT_AGENT_ID,
+  feedbackBaseUrl: FEEDBACK_BASE_URL,
+});
+const conversationService = createConversationService(pool);
 
 const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
 const LOG_DIR = path.resolve(__dirname, "logs");
@@ -158,23 +198,6 @@ async function ensureSchema() {
 }
 
 /**
- * 对 fetch 做统一包装，补充网络不可达时的错误来源描述。
- *
- * @param {string} url 目标地址。
- * @param {object} options fetch 配置。
- * @param {string} label 错误来源标签。
- * @returns {Promise<Response>} fetch 响应对象。
- */
-async function safeFetch(url, options, label) {
-  try {
-    return await fetch(url, options);
-  } catch (err) {
-    const reason = String(err?.cause?.code || err?.code || err?.message || err || "");
-    throw new Error(`${label} unreachable: ${reason}`);
-  }
-}
-
-/**
  * 返回所有接口共用的 CORS 响应头。
  *
  * @returns {Record<string, string>} CORS 响应头。
@@ -237,21 +260,6 @@ function buildAuthUrl(pathValue) {
   const normalizedBase = base.replace(/\/+$/, "") + "/";
   const normalizedPath = raw.startsWith("/") ? raw.slice(1) : raw;
   return new URL(normalizedPath, normalizedBase).toString().replace(/\/$/, "");
-}
-
-/**
- * 构造反馈接口地址。
- *
- * @param {string} messageId 外部消息 ID。
- * @returns {string} 反馈接口地址。
- */
-function getFeedbackUrl(messageId) {
-  if (!FEEDBACK_BASE_URL) return "";
-  const trimmed = String(messageId || "").trim();
-  if (!trimmed) return "";
-  return `${FEEDBACK_BASE_URL}/api/chat/message/${encodeURIComponent(
-    trimmed,
-  )}/feedback`;
 }
 
 function sendFeedbackAcceptedFallback(res, detail) {
@@ -470,369 +478,6 @@ function pickTranscribedText(data) {
  * @param {object} msg 原始消息对象。
  * @returns {object} 规范化后的消息对象。
  */
-function normalizeMessage(msg) {
-  const role = msg?.role === "assistant" ? "assistant" : "user";
-  const content = String(msg?.content || "");
-  const time = String(msg?.time || "");
-  const id = msg?.id ?? msg?.messageId;
-  const externalMessageId =
-    msg?.externalMessageId ?? msg?.external_message_id ?? msg?.externalMessageID;
-  const base = { role, content, time };
-  if (id !== undefined && id !== null && String(id).trim()) {
-    base.id = Number.isFinite(Number(id)) ? Number(id) : String(id);
-  }
-  if (externalMessageId !== undefined && externalMessageId !== null) {
-    const trimmed = String(externalMessageId).trim();
-    if (trimmed) {
-      base.externalMessageId = trimmed;
-    }
-  }
-  return base;
-}
-
-/**
- * 归一化单个会话对象，确保数据库同步所需字段齐全。
- *
- * @param {object} item 原始会话对象。
- * @returns {object} 规范化后的会话对象。
- */
-function normalizeConversation(item) {
-  const now = Date.now();
-  const messages = Array.isArray(item?.messages) ? item.messages.map(normalizeMessage) : [];
-  const platform = item?.platform === "agent" ? "agent" : "dify";
-  return {
-    id: String(item?.id || `conv-${now}`),
-    title: String(item?.title || "新对话"),
-    conversationId: String(item?.conversationId || ""),
-    platform,
-    messages: messages.slice(-80),
-    createdAt: Number(item?.createdAt || now),
-    updatedAt: Number(item?.updatedAt || now),
-  };
-}
-
-/**
- * 归一化用户会话同步负载。
- *
- * @param {object} payload 原始同步负载。
- * @returns {{items: Array, activeId: string}} 规范化后的结果。
- */
-function normalizeUserPayload(payload) {
-  const items = Array.isArray(payload?.items) ? payload.items.map(normalizeConversation) : [];
-  const preferredActive = String(payload?.activeId || "");
-  const activeId = items.some((c) => c.id === preferredActive) ? preferredActive : items[0]?.id || "";
-  return { items, activeId };
-}
-
-const altTokenCache = { token: "", expMs: 0 };
-let altTokenPromise = null;
-
-/**
- * 计算线程创建接口地址，优先使用显式配置。
- *
- * @returns {string} 线程接口地址。
- */
-function getAltThreadUrl() {
-  if (ALT_THREAD_URL) return ALT_THREAD_URL;
-  const marker = "/api/chat/agent/";
-  const idx = ALT_API_URL.indexOf(marker);
-  if (idx >= 0) {
-    const base = ALT_API_URL.slice(0, idx);
-    return `${base}/api/chat/thread`;
-  }
-  return "";
-}
-
-/**
- * 计算上游历史消息查询接口地址。
- *
- * @param {string} agentId 智能体 ID。
- * @param {string} threadId 会话线程 ID。
- * @returns {string} 历史消息接口地址。
- */
-function getAltHistoryUrl(agentId, threadId) {
-  const trimmedThreadId = String(threadId || "").trim();
-  if (!trimmedThreadId) return "";
-  const marker = "/api/chat/agent/";
-  const idx = ALT_API_URL.indexOf(marker);
-  if (idx < 0) return "";
-  const base = ALT_API_URL.slice(0, idx);
-  return `${base}/api/chat/agent/${encodeURIComponent(
-    String(agentId || ALT_AGENT_ID).trim() || ALT_AGENT_ID,
-  )}/history?thread_id=${encodeURIComponent(trimmedThreadId)}`;
-}
-
-/**
- * 判断消息 ID 是否已经是可直接提交给反馈接口的整数主键。
- *
- * @param {string} messageId 消息 ID。
- * @returns {boolean} 是否为整数 ID。
- */
-function isIntegerMessageId(messageId) {
-  return /^\d+$/.test(String(messageId || "").trim());
-}
-
-/**
- * 解析 JWT 中的 exp 字段。
- *
- * @param {string} token JWT 字符串。
- * @returns {number} 过期时间的 Unix 秒级时间戳。
- */
-function parseJwtExp(token) {
-  const parts = String(token || "").split(".");
-  if (parts.length < 2) return 0;
-  const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
-  const pad = payload.length % 4 === 0 ? "" : "=".repeat(4 - (payload.length % 4));
-  try {
-    const json = Buffer.from(payload + pad, "base64").toString("utf8");
-    const data = JSON.parse(json);
-    return Number(data?.exp || 0);
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * 判断缓存中的上游 token 是否仍然有效。
- *
- * @returns {boolean} token 是否有效。
- */
-function hasValidAltToken() {
-  return altTokenCache.token && Date.now() < altTokenCache.expMs;
-}
-
-/**
- * 使用用户名密码向上游认证服务申请 token。
- *
- * @returns {Promise<string>} 上游 access token。
- */
-async function requestAltToken() {
-  if (!ALT_AUTH_URL || !ALT_AUTH_USERNAME || !ALT_AUTH_PASSWORD) {
-    throw new Error("Missing ALT auth config");
-  }
-  const params = new URLSearchParams();
-  params.set("grant_type", "password");
-  params.set("username", ALT_AUTH_USERNAME);
-  params.set("password", ALT_AUTH_PASSWORD);
-  if (String(ALT_AUTH_SCOPE || "").trim()) {
-    params.set("scope", ALT_AUTH_SCOPE);
-  }
-  if (String(ALT_AUTH_CLIENT_ID || "").trim()) {
-    params.set("client_id", ALT_AUTH_CLIENT_ID);
-  }
-  if (String(ALT_AUTH_CLIENT_SECRET || "").trim()) {
-    params.set("client_secret", ALT_AUTH_CLIENT_SECRET);
-  }
-
-  const res = await safeFetch(ALT_AUTH_URL, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: params.toString(),
-  }, "ALT auth service");
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(txt || res.statusText || "ALT token request failed");
-  }
-
-  const data = await res.json().catch(() => ({}));
-  const token = String(data?.access_token || "");
-  if (!token) throw new Error("ALT token missing in response");
-
-  const exp = parseJwtExp(token);
-  altTokenCache.token = token;
-  altTokenCache.expMs = exp ? exp * 1000 - 30_000 : Date.now() + 50 * 60 * 1000;
-  return token;
-}
-
-/**
- * 获取可用的上游认证 token，优先使用缓存，其次动态申请。
- *
- * @returns {Promise<string>} 上游 access token。
- */
-async function getAltAuthToken() {
-  if (ALT_AUTH_URL) {
-    if (hasValidAltToken()) return altTokenCache.token;
-    if (altTokenPromise) return altTokenPromise;
-    altTokenPromise = requestAltToken().finally(() => {
-      altTokenPromise = null;
-    });
-    return altTokenPromise;
-  }
-  if (!ALT_API_TOKEN) {
-    throw new Error("Missing ALT_API_TOKEN or ALT_AUTH_URL env var on server");
-  }
-  return ALT_API_TOKEN;
-}
-
-/**
- * 从数据库读取指定用户的完整会话及消息列表。
- *
- * @param {string} userKey 用户唯一标识。
- * @returns {Promise<{items: Array, activeId: string}>} 会话列表和激活会话 ID。
- */
-async function fetchUserConversations(userKey) {
-  const conn = await pool.getConnection();
-  try {
-    const [userRows] = await conn.execute(
-      "SELECT id, active_conversation_key FROM users WHERE user_key = ?",
-      [userKey],
-    );
-    if (!userRows.length) {
-      return { items: [], activeId: "" };
-    }
-
-    const userId = userRows[0].id;
-    const activeKey = String(userRows[0].active_conversation_key || "");
-    const [convRows] = await conn.execute(
-      "SELECT id, conversation_key, title, platform, dify_conversation_id, created_at_ms, updated_at_ms FROM conversations WHERE user_id = ? ORDER BY updated_at_ms DESC",
-      [userId],
-    );
-
-    if (!convRows.length) {
-      return { items: [], activeId: "" };
-    }
-
-    const convIds = convRows.map((row) => row.id);
-    const placeholders = convIds.map(() => "?").join(",");
-    const [msgRows] = await conn.query(
-      `SELECT id, conversation_id, role, content, time_label, position, external_message_id FROM messages WHERE conversation_id IN (${placeholders}) ORDER BY conversation_id, position`,
-      convIds,
-    );
-
-    const msgMap = new Map();
-    for (const row of msgRows) {
-      const list = msgMap.get(row.conversation_id) || [];
-      list.push({
-        id: row.id,
-        role: row.role === "assistant" ? "assistant" : "user",
-        content: String(row.content || ""),
-        time: String(row.time_label || ""),
-        externalMessageId: row.external_message_id
-          ? String(row.external_message_id)
-          : "",
-      });
-      msgMap.set(row.conversation_id, list);
-    }
-
-    const items = convRows.map((row) =>
-      normalizeConversation({
-        id: String(row.conversation_key || ""),
-        title: String(row.title || ""),
-        conversationId: String(row.dify_conversation_id || ""),
-        platform: row.platform === "agent" ? "agent" : "dify",
-        messages: msgMap.get(row.id) || [],
-        createdAt: Number(row.created_at_ms || Date.now()),
-        updatedAt: Number(row.updated_at_ms || Date.now()),
-      }),
-    );
-
-    const activeId = items.some((c) => c.id === activeKey) ? activeKey : items[0]?.id || "";
-    return { items, activeId };
-  } finally {
-    conn.release();
-  }
-}
-
-/**
- * 将用户会话列表整体写回数据库，并返回新生成的消息 ID 映射。
- *
- * @param {string} userKey 用户唯一标识。
- * @param {object} payload 会话同步负载。
- * @returns {Promise<{messageIds: Record<string, Array<number>>}>} 消息 ID 映射。
- */
-async function syncUserConversations(userKey, payload) {
-  const normalized = normalizeUserPayload(payload);
-  const messageIds = {};
-  const conn = await pool.getConnection();
-  try {
-    await conn.beginTransaction();
-
-    const [userResult] = await conn.execute(
-      "INSERT INTO users (user_key, active_conversation_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE active_conversation_key = VALUES(active_conversation_key), id = LAST_INSERT_ID(id)",
-      [userKey, normalized.activeId || null],
-    );
-    const userId = userResult.insertId;
-
-    const [existingRows] = await conn.execute(
-      "SELECT id, conversation_key FROM conversations WHERE user_id = ?",
-      [userId],
-    );
-    const existingMap = new Map(existingRows.map((row) => [row.conversation_key, row.id]));
-    const keepKeys = new Set();
-
-    for (const conv of normalized.items) {
-      const convKey = String(conv.id || "");
-      keepKeys.add(convKey);
-      const title = String(conv.title || "");
-      const platform = conv.platform === "agent" ? "agent" : "dify";
-      const difyConversationId = conv.conversationId ? String(conv.conversationId) : null;
-      const createdAtMs = Number(conv.createdAt || Date.now());
-      const updatedAtMs = Number(conv.updatedAt || Date.now());
-
-      let convId = existingMap.get(convKey);
-      if (convId) {
-        await conn.execute(
-          "UPDATE conversations SET title = ?, platform = ?, dify_conversation_id = ?, created_at_ms = ?, updated_at_ms = ? WHERE id = ?",
-          [title, platform, difyConversationId, createdAtMs, updatedAtMs, convId],
-        );
-      } else {
-        const [insertResult] = await conn.execute(
-          "INSERT INTO conversations (user_id, conversation_key, title, platform, dify_conversation_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
-          [userId, convKey, title, platform, difyConversationId, createdAtMs, updatedAtMs],
-        );
-        convId = insertResult.insertId;
-        existingMap.set(convKey, convId);
-      }
-
-      await conn.execute("DELETE FROM messages WHERE conversation_id = ?", [convId]);
-      const messages = Array.isArray(conv.messages) ? conv.messages.map(normalizeMessage) : [];
-      if (messages.length) {
-        const values = messages.map((msg, idx) => [
-          convId,
-          msg.role === "assistant" ? "assistant" : "user",
-          String(msg.content || ""),
-          String(msg.time || ""),
-          idx,
-          updatedAtMs,
-          msg.externalMessageId ? String(msg.externalMessageId) : null,
-        ]);
-        await conn.query(
-          "INSERT INTO messages (conversation_id, role, content, time_label, position, created_at_ms, external_message_id) VALUES ?",
-          [values],
-        );
-      }
-      const [idRows] = await conn.execute(
-        "SELECT id FROM messages WHERE conversation_id = ? ORDER BY position",
-        [convId],
-      );
-      messageIds[convKey] = idRows.map((row) => row.id);
-    }
-
-    if (keepKeys.size) {
-      const keys = Array.from(keepKeys);
-      const placeholders = keys.map(() => "?").join(",");
-      await conn.execute(
-        `DELETE FROM conversations WHERE user_id = ? AND conversation_key NOT IN (${placeholders})`,
-        [userId, ...keys],
-      );
-    } else {
-      await conn.execute("DELETE FROM conversations WHERE user_id = ?", [userId]);
-    }
-
-    await conn.commit();
-    return { messageIds };
-  } catch (err) {
-    await conn.rollback();
-    throw err;
-  } finally {
-    conn.release();
-  }
-}
-
 /**
  * 转发 Dify `/chat-messages` 接口，并保持流式响应能力。
  *
@@ -852,7 +497,7 @@ async function handleChatMessages(req, res) {
   const controller = new AbortController();
   req.on("close", () => controller.abort());
 
-  const upstreamRes = await fetch(upstreamUrl, {
+  const upstreamRes = await safeFetch(upstreamUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${DIFY_API_KEY}`,
@@ -860,7 +505,7 @@ async function handleChatMessages(req, res) {
     },
     body: JSON.stringify(body),
     signal: controller.signal,
-  });
+  }, "Dify chat service", DEFAULT_FETCH_TIMEOUT_MS);
 
   const contentType = upstreamRes.headers.get("content-type") || "application/octet-stream";
   const isSse = contentType.includes("text/event-stream");
@@ -895,7 +540,7 @@ async function handleConversationsList(req, res, url) {
     return;
   }
 
-  const data = await fetchUserConversations(userId);
+  const data = await conversationService.fetchUserConversations(userId);
   sendJson(res, 200, { items: data.items || [], activeId: data.activeId || "" });
 }
 
@@ -914,7 +559,7 @@ async function handleConversationsSync(req, res) {
     return;
   }
 
-  const result = await syncUserConversations(userId, body);
+  const result = await conversationService.syncUserConversations(userId, body);
   sendJson(res, 200, { ok: true, messageIds: result.messageIds || {} });
 }
 
@@ -984,7 +629,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
     return trimmedId;
   }
 
-  const historyUrl = getAltHistoryUrl(ALT_AGENT_ID, threadId);
+  const historyUrl = aiWikiService.getHistoryUrl(ALT_AGENT_ID, threadId);
   if (!historyUrl) {
     appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
@@ -1006,6 +651,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
       },
     },
     "ALT history service",
+    ALT_FEEDBACK_TIMEOUT_MS,
   );
 
   const text = await upstreamRes.text().catch(() => "");
@@ -1649,7 +1295,7 @@ async function handleAltChat(req, res) {
   }
   let token = "";
   try {
-    token = await getAltAuthToken();
+    token = await altAuthService.getToken();
   } catch (err) {
     sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
@@ -1674,7 +1320,7 @@ async function handleAltChat(req, res) {
     },
     body: JSON.stringify(payload),
     signal: controller.signal,
-  }, "ALT chat service");
+  }, "ALT chat service", ALT_CHAT_TIMEOUT_MS);
 
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
@@ -1772,7 +1418,7 @@ async function handleAltChatStream(req, res) {
   const requestId = createAltStreamDiagId();
   let token = "";
   try {
-    token = await getAltAuthToken();
+    token = await altAuthService.getToken();
   } catch (err) {
     logMessageSummary(requestId, "auth-error", {
       error: String(err?.message || err || ""),
@@ -1801,7 +1447,7 @@ async function handleAltChatStream(req, res) {
     },
     body: JSON.stringify(payload),
     signal: controller.signal,
-  }, "ALT chat service");
+  }, "ALT chat service", ALT_STREAM_CONNECT_TIMEOUT_MS);
   if (!upstreamRes.ok) {
     const txt = await upstreamRes.text().catch(() => "");
     logMessageSummary(requestId, "upstream-error", {
@@ -2011,7 +1657,7 @@ async function handleAltChatStream(req, res) {
  * @returns {Promise<void>}
  */
 async function handleAltThread(req, res) {
-  const threadUrl = getAltThreadUrl();
+  const threadUrl = aiWikiService.getThreadUrl();
   if (!threadUrl) {
     sendJson(res, 500, { error: "服务端缺少 ALT_THREAD_URL 配置", source: "server-config" });
     return;
@@ -2019,7 +1665,7 @@ async function handleAltThread(req, res) {
 
   let token = "";
   try {
-    token = await getAltAuthToken();
+    token = await altAuthService.getToken();
   } catch (err) {
     sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
     return;
@@ -2040,7 +1686,7 @@ async function handleAltThread(req, res) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(payload),
-  }, "ALT thread service");
+  }, "ALT thread service", ALT_THREAD_TIMEOUT_MS);
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
@@ -2093,14 +1739,14 @@ async function handleAuthToken(req, res) {
   params.set("code", code);
   params.set("redirect_uri", redirectUri);
 
-  const upstreamRes = await fetch(tokenUrl, {
+  const upstreamRes = await safeFetch(tokenUrl, {
     method: "POST",
     headers: {
       accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: params.toString(),
-  });
+  }, "OAuth Token service", OAUTH_TIMEOUT_MS);
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
@@ -2138,13 +1784,13 @@ async function handleAuthUserInfo(req, res) {
 
   // eslint-disable-next-line no-console
   console.log(`[AUTH USERINFO] GET ${userInfoUrl}`);
-  const upstreamRes = await fetch(userInfoUrl, {
+  const upstreamRes = await safeFetch(userInfoUrl, {
     method: "GET",
     headers: {
       accept: "application/json",
       Authorization: authHeader,
     },
-  });
+  }, "OAuth UserInfo service", OAUTH_TIMEOUT_MS);
 
   const text = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
@@ -2236,14 +1882,14 @@ async function handleUrlEntryUserInfo(req, res) {
     return;
   }
 
-  const upstreamRes = await fetch(URL_ENTRY_VERIFY_URL, {
+  const upstreamRes = await safeFetch(URL_ENTRY_VERIFY_URL, {
     method: "POST",
     headers: {
       accept: "application/json",
       "content-type": "application/json",
     },
     body: JSON.stringify({ loginId, cc: credential, orgId, clientType, appId }),
-  });
+  }, "URL entry verify service", URL_ENTRY_TIMEOUT_MS);
   const text = await upstreamRes.text().catch(() => "");
   let data = null;
   try {
@@ -2351,7 +1997,7 @@ async function handleFeedback(req, res) {
 
   let token = "";
   try {
-    token = await getAltAuthToken();
+    token = await altAuthService.getToken();
   } catch (err) {
     sendFeedbackAcceptedFallback(res, {
       reason: "auth-error",
@@ -2388,7 +2034,7 @@ async function handleFeedback(req, res) {
     return;
   }
 
-  const feedbackUrl = getFeedbackUrl(messageId);
+  const feedbackUrl = aiWikiService.getFeedbackUrl(messageId);
   if (!feedbackUrl) {
     sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
     return;
@@ -2408,6 +2054,7 @@ async function handleFeedback(req, res) {
         body: JSON.stringify(payload),
       },
       "ALT feedback service",
+      ALT_FEEDBACK_TIMEOUT_MS,
     );
   } catch (err) {
     sendFeedbackAcceptedFallback(res, {
@@ -2490,7 +2137,7 @@ async function handleFeedbackStatus(req, res, messageId) {
 
   let token = "";
   try {
-    token = await getAltAuthToken();
+    token = await altAuthService.getToken();
   } catch (err) {
     appendJsonLog(SERVER_LOG_PREFIX, {
       ts: new Date().toISOString(),
@@ -2521,7 +2168,7 @@ async function handleFeedbackStatus(req, res, messageId) {
     return;
   }
 
-  const feedbackUrl = getFeedbackUrl(trimmedId);
+  const feedbackUrl = aiWikiService.getFeedbackUrl(trimmedId);
   if (!feedbackUrl) {
     sendJson(res, 500, { error: "服务端缺少 FEEDBACK_BASE_URL 配置", source: "server-config" });
     return;
@@ -2539,6 +2186,7 @@ async function handleFeedbackStatus(req, res, messageId) {
         },
       },
       "ALT feedback status service",
+      ALT_FEEDBACK_TIMEOUT_MS,
     );
   } catch (err) {
     appendJsonLog(SERVER_LOG_PREFIX, {
@@ -2592,11 +2240,9 @@ async function handleAudioToText(req, res) {
     return;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
   let upstreamRes;
   try {
-    upstreamRes = await fetch(AUDIO_TO_TEXT_URL, {
+    upstreamRes = await safeFetch(AUDIO_TO_TEXT_URL, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${AUDIO_TO_TEXT_TOKEN}`,
@@ -2604,16 +2250,13 @@ async function handleAudioToText(req, res) {
       },
       body: req,
       duplex: "half",
-      signal: controller.signal,
-    });
+    }, "Audio-to-text service", AUDIO_TO_TEXT_TIMEOUT_MS);
   } catch (err) {
     sendJson(res, 502, {
       error: `语音转文字服务不可达：${String(err?.message || err || "")}`,
       source: "audio-to-text",
     });
     return;
-  } finally {
-    clearTimeout(timeout);
   }
 
   const raw = await upstreamRes.text().catch(() => "");
@@ -2677,131 +2320,39 @@ async function handleStatic(req, res) {
   }
 }
 
-/**
- * HTTP 服务器入口，根据路径分发到各个业务处理函数。
- */
-const server = http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url || "/", "http://localhost");
-
-    if (req.method === "OPTIONS") {
-      res.writeHead(204, corsHeaders());
-      res.end();
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/health") {
-      sendJson(res, 200, {
-        ok: true,
-        difyBaseUrl: DIFY_BASE_URL,
-        keyConfigured: Boolean(DIFY_API_KEY),
-        altConfigured: Boolean(ALT_API_TOKEN || ALT_AUTH_URL),
-      });
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/auth-config") {
-      sendJson(res, 200, {
-        authorizeUrlBase: getAuthAuthorizeUrlBase(),
-        clientId: AUTH_CLIENT_ID,
-        redirectUri: AUTH_REDIRECT_URI,
-        scope: AUTH_SCOPE,
-      });
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/auth-token") {
-      await handleAuthToken(req, res);
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/auth-userinfo") {        
-      await handleAuthUserInfo(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/url-entry-userinfo") {
-      await handleUrlEntryUserInfo(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/auth-userinfo-log") {
-      await handleAuthUserInfoClientLog(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/client-log") {
-      await handleClientLog(req, res);
-      return;
-    }
-
-    if (url.pathname === "/api/feedback") {
-      if (req.method === "POST") {
-        await handleFeedback(req, res);
-        return;
-      }
-      if (req.method === "GET") {
-        await handleFeedbackStatus(req, res, url.searchParams.get("messageId"));
-        return;
-      }
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/conversations") {
-      await handleConversationsList(req, res, url);
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/api/message-meta") {
-      await handleMessageMeta(req, res, url);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/conversations/sync") {
-      await handleConversationsSync(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/alt-chat") {
-      await handleAltChat(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/alt-chat-stream") {
-      await handleAltChatStream(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/alt-thread") {
-      await handleAltThread(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/audio-to-text") {
-      await handleAudioToText(req, res);
-      return;
-    }
-
-    if (req.method === "POST" && url.pathname === "/api/chat-messages") {
-      await handleChatMessages(req, res);
-      return;
-    }
-
-    if (req.method === "GET" || req.method === "HEAD") {
-      await handleStatic(req, res);
-      return;
-    }
-
-    res.writeHead(405, { ...corsHeaders(), "Content-Type": "text/plain; charset=utf-8" });
-    res.end("Method not allowed");
-  } catch (err) {
-    const code = err?.statusCode || 500;
-    sendJson(res, code, {
-      error: formatInternalError(err),
-      source: "server",
-      errorCode: String(err?.code || ""),
-    });
-  }
-});
+const server = http.createServer(createApiRouter({
+  authConfig: () => ({
+    authorizeUrlBase: getAuthAuthorizeUrlBase(),
+    clientId: AUTH_CLIENT_ID,
+    redirectUri: AUTH_REDIRECT_URI,
+    scope: AUTH_SCOPE,
+  }),
+  corsHeaders,
+  formatInternalError,
+  handleAltChat,
+  handleAltChatStream,
+  handleAltThread,
+  handleAudioToText,
+  handleAuthToken,
+  handleAuthUserInfo,
+  handleAuthUserInfoClientLog,
+  handleChatMessages,
+  handleClientLog,
+  handleConversationsList,
+  handleConversationsSync,
+  handleFeedback,
+  handleFeedbackStatus,
+  handleMessageMeta,
+  handleStatic,
+  handleUrlEntryUserInfo,
+  health: () => ({
+    ok: true,
+    difyBaseUrl: DIFY_BASE_URL,
+    keyConfigured: Boolean(DIFY_API_KEY),
+    altConfigured: Boolean(ALT_API_TOKEN || ALT_AUTH_URL),
+  }),
+  sendJson,
+}));
 
 /**
  * 启动前先补齐数据库结构，再启动 HTTP 服务。
@@ -2812,7 +2363,7 @@ ensureSchema()
       const activeUpstreams = {
         ALT_API_URL,
         ALT_AUTH_URL,
-        ALT_THREAD_URL: getAltThreadUrl(),
+        ALT_THREAD_URL: aiWikiService.getThreadUrl(),
       };
       // eslint-disable-next-line no-console
       console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);

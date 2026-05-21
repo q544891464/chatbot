@@ -1,5 +1,4 @@
 ﻿import { getLoginUserInfo } from "./platform-bridge.js";
-import { renderMarkdownLite } from "./markdown.js";
 import { exitH5Page } from "./platform-bridge.js";
 import { getBridgeDiagnostics } from "./platform-bridge.js";
 import {
@@ -37,9 +36,21 @@ import {
   closeFeedbackModal,
 } from "./feedback.js";
 import { agentChatStream, createAgentThread } from "./chat-api.js";
+import {
+  createConversation,
+  createLocalConversationStorage,
+  normalizeConversation,
+} from "./conversation-store.js";
+import {
+  setActionIcon,
+  setBubbleContent,
+} from "./message-renderer.js";
+import {
+  setAccessDeniedState,
+  setBusyState,
+} from "./ui-state.js";
+import { createVoiceInput } from "./voice.js";
 const STORAGE_KEY = "h5ChatbotConfig:v1";
-const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
-const LOCAL_CONVERSATION_KEY = "h5ChatbotConversations:v1";
 const AGENT_ID = "ChatbotAgent";
 const FEEDBACK_ENDPOINT_PATH = "/feedback";
 const EMPTY_ASSISTANT_FALLBACK = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
@@ -129,22 +140,15 @@ function saveConfig(cfg) {
 } // Choose a stable identifier for server-side conversation storage.
 
 function getLocalConversationKey(userId = state.config.userId) {
-  return `${LOCAL_CONVERSATION_KEY}:${String(userId || "anonymous")}`;
+  return localConversationStorage.getKey(userId);
 }
 
 function saveConversationsToLocal(payload) {
-  try {
-    localStorage.setItem(getLocalConversationKey(), JSON.stringify(payload));
-  } catch {
-    // ignore local cache failures
-  }
+  localConversationStorage.save(payload);
 }
 
 function loadConversationsFromLocal() {
-  const data = safeJsonParse(
-    localStorage.getItem(getLocalConversationKey()) || "null",
-    null,
-  );
+  const data = localConversationStorage.load();
   const items = Array.isArray(data?.items)
     ? data.items.map(normalizeConversation)
     : [];
@@ -157,47 +161,6 @@ function loadConversationsFromLocal() {
   };
 }
 
-/**
- * 归一化单个会话对象，保证字段齐全且消息数量受限。
- *
- * @param {object} item 原始会话对象。
- * @returns {object} 规范化后的会话对象。
- */
-function normalizeConversation(item) {
-  const now = Date.now();
-  const messages = Array.isArray(item?.messages) ? item.messages : [];
-  const platform = "agent";
-  const title =
-    String(item?.title || "").trim() || deriveTitleFromMessages(messages);
-  return {
-    id: String(item?.id || randomId("conv")),
-    title,
-    conversationId: String(item?.conversationId || ""),
-    platform,
-    messages: clampMessages(messages),
-    createdAt: Number(item?.createdAt || now),
-    updatedAt: Number(item?.updatedAt || now),
-  };
-}
-/**
- * 基于种子数据创建一个新的本地会话对象。
- *
- * @param {object} seed 新会话的初始字段。
- * @returns {object} 新建会话对象。
- */
-function createConversation(seed) {
-  const now = Date.now();
-  const base = normalizeConversation({
-    id: randomId("conv"),
-    title: seed?.title || "新对话",
-    conversationId: seed?.conversationId || "",
-    platform: seed?.platform || "agent",
-    messages: seed?.messages || [],
-    createdAt: now,
-    updatedAt: now,
-  });
-  return base;
-}
 /**
  * 计算当前页面应使用的会话存储/代理接口地址。
  *
@@ -272,15 +235,7 @@ function hasAuthenticatedUserInfo() {
 }
 
 function setAccessDenied(denied) {
-  state.accessDenied = Boolean(denied);
-  document.body.classList.toggle("access-denied", state.accessDenied);
-  el.input.disabled = state.accessDenied;
-  el.sendBtn.disabled = state.accessDenied || Boolean(state.inFlight);
-  el.newChatBtn.disabled = state.accessDenied;
-  el.chatListBtn.disabled = state.accessDenied;
-  el.input.placeholder = state.accessDenied
-    ? "未获取到登录用户信息"
-    : "询问任何问题";
+  setAccessDeniedState(el, state, denied);
 }
 
 /**
@@ -437,17 +392,15 @@ const viewportState = {
   height: 0,
   orientation: "",
 };
-const voiceState = {
-  recording: false,
-  transcribing: false,
-  stream: null,
-  audioContext: null,
-  source: null,
-  processor: null,
-  chunks: [],
-  sampleRate: 16000,
-  timer: 0,
-};
+const localConversationStorage = createLocalConversationStorage(() => state.config.userId);
+const voiceInput = createVoiceInput({
+  el,
+  state,
+  getStoreBase,
+  sendMessage: () => sendMessage(),
+  setTips,
+  updateTextareaHeight,
+});
 const IS_MOBILE = (() => {
   const ua = navigator.userAgent || "";
   const touch = navigator.maxTouchPoints || 0;
@@ -509,12 +462,9 @@ async function initConversations() {
     updateConversationList();
     updateScrollButton();
   }
-  const legacy = safeJsonParse(
-    localStorage.getItem(LEGACY_CHAT_KEY) || "null",
-    null,
-  );
+  const legacy = localConversationStorage.loadLegacy();
   if (legacy) {
-    localStorage.removeItem(LEGACY_CHAT_KEY);
+    localConversationStorage.clearLegacy();
   }
 }
 /**
@@ -827,66 +777,6 @@ function renderFollowupSuggestions(items) {
   wrap.appendChild(list);
   el.messages.appendChild(wrap);
   if (shouldAutoScroll(el.messages)) scrollToBottom(el.messages);
-}
-/**
- * 在展示前清理助手回复中的前导空行，并修正常见的残缺加粗标记。
- *
- * @param {string} content 助手原始回复文本。
- * @returns {string} 适合前端渲染的文本。
- */
-function normalizeAssistantContentForDisplay(content) {
-  return String(content || "")
-    .replace(/^(?:\uFEFF)?(?:[ \t]*\r?\n)+/, "");
-}
-
-function escapeHtml(text) {
-  return String(text || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-const ACTION_ICONS = {
-  copy: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" d="M8 8h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2Z"/><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M15 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h1"/></svg>',
-  like: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path fill="currentColor" d="M8.2 20H5a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3h2.1l3.1-5.5A2.3 2.3 0 0 1 14.5 5v4h3.2a3.3 3.3 0 0 1 3.2 4l-1 4.2a3.6 3.6 0 0 1-3.5 2.8H8.2ZM8 11H5a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1h3v-7Zm2 7h6.4a1.6 1.6 0 0 0 1.6-1.2l1-4.2A1.3 1.3 0 0 0 17.7 11H13a1 1 0 0 1-1-1V5.5a.3.3 0 0 0-.6-.2L10 7.8V18Z"/></svg>',
-  dislike: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true" focusable="false"><path fill="currentColor" d="M15.8 4H19a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3h-2.1l-3.1 5.5A2.3 2.3 0 0 1 9.5 19v-4H6.3a3.3 3.3 0 0 1-3.2-4l1-4.2A3.6 3.6 0 0 1 7.6 4h8.2ZM16 13h3a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3v7Zm-2-7H7.6A1.6 1.6 0 0 0 6 7.2l-1 4.2A1.3 1.3 0 0 0 6.3 13H11a1 1 0 0 1 1 1v4.5a.3.3 0 0 0 .6.2l1.4-2.5V6Z"/></svg>',
-};
-
-function setActionIcon(button, iconName, label) {
-  button.classList.add("msg__action--icon");
-  button.title = label;
-  button.setAttribute("aria-label", label);
-  button.innerHTML = ACTION_ICONS[iconName] || "";
-}
-/**
- * 按角色与状态更新消息气泡内容。
- *
- * @param {HTMLElement} bubble 消息气泡节点。
- * @param {"user"|"assistant"} role 消息角色。
- * @param {string} content 消息内容。
- * @param {string} status 消息状态。
- */
-function setBubbleContent(bubble, role, content, status) {
-  if (role === "assistant") {
-    bubble.classList.add("md");
-    const isTyping = status === "typing";
-    const progressText = bubble.dataset.progress || "正在思考";
-    const thinkingHtml = `      <div class="md-typing md-typing--block" aria-live="polite">        <span class="md-typing__text">${escapeHtml(progressText)}</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>        <span class="md-typing__dot">.</span>      </div>    `;
-    if (!content) {
-      bubble.innerHTML = isTyping ? thinkingHtml : "";
-      return;
-    }
-    const body = renderMarkdownLite(normalizeAssistantContentForDisplay(content));
-    bubble.innerHTML = isTyping
-      ? `${body}
-${thinkingHtml}`
-      : body;
-  } else {
-    bubble.classList.remove("md");
-    bubble.textContent = content || "";
-  }
 }
 /**
  * 为单条消息创建 DOM 结构及其交互逻辑。
@@ -1311,226 +1201,7 @@ function getChatApiCtx() {
  * @param {boolean} busy 当前是否处于请求中。
  */
 function setBusy(busy) {
-  el.sendBtn.disabled = busy || state.accessDenied;
-  if (el.voiceBtn) {
-    el.voiceBtn.disabled = busy || state.accessDenied || voiceState.transcribing;
-  }
-  el.stopBtn.hidden = !busy;
-}
-
-function setVoiceUi(status) {
-  if (!el.voiceBtn) return;
-  const recording = status === "recording";
-  const transcribing = status === "transcribing";
-  voiceState.recording = recording;
-  voiceState.transcribing = transcribing;
-  el.voiceBtn.classList.toggle("is-recording", recording);
-  el.voiceBtn.classList.toggle("is-transcribing", transcribing);
-  el.voiceBtn.disabled = state.accessDenied || Boolean(state.inFlight) || transcribing;
-  el.voiceBtn.title = recording ? "结束录音" : transcribing ? "正在识别" : "语音输入";
-  el.voiceBtn.setAttribute("aria-label", el.voiceBtn.title);
-}
-
-function cleanupVoiceRecorder() {
-  if (voiceState.timer) {
-    window.clearTimeout(voiceState.timer);
-    voiceState.timer = 0;
-  }
-  try {
-    voiceState.processor?.disconnect();
-    voiceState.source?.disconnect();
-  } catch {
-    // ignore recorder cleanup errors
-  }
-  try {
-    voiceState.stream?.getTracks().forEach((track) => track.stop());
-  } catch {
-    // ignore recorder cleanup errors
-  }
-  if (voiceState.audioContext && voiceState.audioContext.state !== "closed") {
-    voiceState.audioContext.close().catch(() => {});
-  }
-  voiceState.stream = null;
-  voiceState.audioContext = null;
-  voiceState.source = null;
-  voiceState.processor = null;
-}
-
-function mergeAudioChunks(chunks) {
-  const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Float32Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return merged;
-}
-
-function resampleAudio(input, fromRate, toRate) {
-  if (fromRate === toRate) return input;
-  const ratio = fromRate / toRate;
-  const length = Math.max(1, Math.round(input.length / ratio));
-  const output = new Float32Array(length);
-  for (let i = 0; i < length; i += 1) {
-    const sourceIndex = i * ratio;
-    const before = Math.floor(sourceIndex);
-    const after = Math.min(before + 1, input.length - 1);
-    const weight = sourceIndex - before;
-    output[i] = input[before] * (1 - weight) + input[after] * weight;
-  }
-  return output;
-}
-
-function encodeWav(samples, sampleRate) {
-  const bytesPerSample = 2;
-  const blockAlign = bytesPerSample;
-  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample);
-  const view = new DataView(buffer);
-  const writeString = (offset, value) => {
-    for (let i = 0; i < value.length; i += 1) {
-      view.setUint8(offset + i, value.charCodeAt(i));
-    }
-  };
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + samples.length * bytesPerSample, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true);
-  writeString(36, "data");
-  view.setUint32(40, samples.length * bytesPerSample, true);
-  let offset = 44;
-  for (const sample of samples) {
-    const clamped = Math.max(-1, Math.min(1, sample));
-    view.setInt16(offset, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
-    offset += 2;
-  }
-  return new Blob([buffer], { type: "audio/wav" });
-}
-
-function pickAudioText(data) {
-  const sources = [data, data?.raw, data?.raw?.data, data?.data, data?.result];
-  const keys = ["text", "content", "transcript", "transcription", "message", "answer"];
-  for (const source of sources) {
-    if (!source || typeof source !== "object") continue;
-    for (const key of keys) {
-      const value = String(source[key] || "").trim();
-      if (value) return value;
-    }
-  }
-  return "";
-}
-
-async function transcribeAudio(blob, filename = "recording.wav") {
-  const form = new FormData();
-  form.append("file", blob, filename);
-  form.append("user", "lndx");
-  const res = await fetch(`${getStoreBase()}/audio-to-text`, {
-    method: "POST",
-    body: form,
-  });
-  if (!res.ok) {
-    throw new Error(await readResponseError(res, "语音识别失败"));
-  }
-  const data = await res.json().catch(() => ({}));
-  const text = pickAudioText(data);
-  if (!text) throw new Error("语音识别失败：没有识别到文字");
-  return text;
-}
-
-async function submitVoiceFile(file) {
-  if (!file || state.accessDenied || state.inFlight || voiceState.transcribing) return;
-  setVoiceUi("transcribing");
-  setTips("正在识别语音...");
-  try {
-    const text = await transcribeAudio(file, file.name || "recording.wav");
-    el.input.value = text;
-    updateTextareaHeight();
-    setTips("");
-    await sendMessage();
-  } catch (err) {
-    setTips(String(err?.message || err || "语音识别失败"));
-  } finally {
-    setVoiceUi("idle");
-    if (el.voiceFileInput) el.voiceFileInput.value = "";
-  }
-}
-
-async function startVoiceInput() {
-  if (state.accessDenied || state.inFlight || voiceState.transcribing) return;
-  if (!navigator.mediaDevices?.getUserMedia) {
-    setTips(window.isSecureContext ? "当前浏览器不支持录音。" : "当前 HTTPS 证书未被浏览器信任，无法调用麦克风。");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-    const audioContext = new AudioContextClass();
-    const source = audioContext.createMediaStreamSource(stream);
-    const processor = audioContext.createScriptProcessor(4096, 1, 1);
-    voiceState.stream = stream;
-    voiceState.audioContext = audioContext;
-    voiceState.source = source;
-    voiceState.processor = processor;
-    voiceState.sampleRate = audioContext.sampleRate;
-    voiceState.chunks = [];
-    processor.onaudioprocess = (event) => {
-      if (!voiceState.recording) return;
-      voiceState.chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
-    };
-    source.connect(processor);
-    processor.connect(audioContext.destination);
-    setVoiceUi("recording");
-    setTips("正在录音，再点一次结束并发送。");
-    voiceState.timer = window.setTimeout(() => {
-      stopVoiceInput().catch((err) => setTips(String(err?.message || err || "语音识别失败")));
-    }, 55000);
-  } catch (err) {
-    cleanupVoiceRecorder();
-    setVoiceUi("idle");
-    setTips(formatRuntimeError(err, "无法开始录音，请检查麦克风权限"));
-  }
-}
-
-async function stopVoiceInput() {
-  if (!voiceState.recording) return;
-  const chunks = voiceState.chunks.slice();
-  const sampleRate = voiceState.sampleRate;
-  cleanupVoiceRecorder();
-  setVoiceUi("transcribing");
-  setTips("正在识别语音...");
-  try {
-    const merged = mergeAudioChunks(chunks);
-    if (merged.length < sampleRate * 0.25) {
-      throw new Error("录音时间太短，请重新录入。");
-    }
-    const samples = resampleAudio(merged, sampleRate, 16000);
-    const wav = encodeWav(samples, 16000);
-    const text = await transcribeAudio(wav);
-    el.input.value = text;
-    updateTextareaHeight();
-    setTips("");
-    await sendMessage();
-  } catch (err) {
-    setTips(String(err?.message || err || "语音识别失败"));
-  } finally {
-    voiceState.chunks = [];
-    setVoiceUi("idle");
-  }
-}
-
-function toggleVoiceInput() {
-  if (voiceState.recording) {
-    stopVoiceInput();
-    return;
-  }
-  startVoiceInput();
+  setBusyState(el, state, busy, voiceInput);
 }
 /**
  * 根据滚动位置控制“滚到底部”按钮显示。
@@ -1565,9 +1236,31 @@ async function sendMessage() {
     return;
   }
   setTips("");
+  const conv = getActiveConversation();
+  const pendingUserMsg = { role: "user", content: text, time: nowTime() };
+  const pendingTitle =
+    conv.title === "新对话"
+      ? deriveTitleFromMessages([...conv.messages, pendingUserMsg])
+      : conv.title;
+  if (!conv.conversationId) {
+    setBusy(true);
+    try {
+      conv.conversationId = await createAgentThread(getChatApiCtx(), pendingTitle);
+      conv.updatedAt = Date.now();
+      if (conv.title === "新对话") {
+        conv.title = pendingTitle;
+      }
+      saveConversations();
+      updateConversationList();
+    } catch (err) {
+      setTips(String(err?.message || err || "无法创建对话 ID"));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+  }
   el.input.value = "";
   updateTextareaHeight();
-  const conv = getActiveConversation();
   const autoScroll = shouldAutoScroll(el.messages);
   if (!conv.messages.length) {
     el.messages.innerHTML = "";
@@ -1575,22 +1268,10 @@ async function sendMessage() {
   if (!conv.platform) {
     conv.platform = "agent";
   }
-  conv.messages.push({ role: "user", content: text, time: nowTime() });
+  conv.messages.push(pendingUserMsg);
   conv.updatedAt = Date.now();
   if (conv.title === "新对话") {
     conv.title = deriveTitleFromMessages(conv.messages);
-  }
-  let createThreadError = "";
-  if (!conv.conversationId) {
-    try {
-      conv.conversationId = await createAgentThread(getChatApiCtx(), conv.title);
-      conv.updatedAt = Date.now();
-      saveConversations();
-      updateConversationList();
-    } catch (err) {
-      createThreadError = String(err?.message || err || "无法创建对话 ID");
-      setTips(createThreadError);
-    }
   }
   const userNode = createMessageNode(conv.messages[conv.messages.length - 1]);
   el.messages.appendChild(userNode.wrap);
@@ -1616,9 +1297,6 @@ async function sendMessage() {
   state.inFlight = controller;
   setBusy(true);
   try {
-    if (!conv.conversationId) {
-      throw new Error(createThreadError || "无法创建对话 ID");
-    }
     await agentChatStream(getChatApiCtx(), {
       query: text,
       signal: controller.signal,
@@ -1841,10 +1519,10 @@ async function goBack() {
 
 // Events
 el.sendBtn.addEventListener("click", sendMessage);
-el.voiceBtn?.addEventListener("click", toggleVoiceInput);
+el.voiceBtn?.addEventListener("click", () => voiceInput.toggle());
 el.voiceFileInput?.addEventListener("change", () => {
   const file = el.voiceFileInput.files?.[0];
-  submitVoiceFile(file);
+  voiceInput.submitFile(file);
 });
 el.stopBtn.addEventListener("click", stopGeneration);
 el.backBtn?.addEventListener("click", goBack);
