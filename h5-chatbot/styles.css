@@ -761,6 +761,41 @@ body::after{
   background: rgba(156,163,175,0.65);
   box-shadow: none;
 }
+.composer__voice{
+  width: 44px;
+  height: 44px;
+  border: 1px solid rgba(185,201,225,0.46);
+  background: rgba(255,255,255,0.82);
+  color: rgba(48,69,102,0.9);
+  border-radius: 16px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  transition: transform 0.12s ease, background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+  cursor: pointer;
+}
+.composer__voice:hover{
+  background: #ffffff;
+  color: var(--primary-strong);
+}
+.composer__voice:active{ transform: scale(0.94); }
+.composer__voice:disabled{
+  color: rgba(102,118,143,0.55);
+  background: rgba(229,234,242,0.66);
+  cursor: not-allowed;
+}
+.composer__voice.is-recording{
+  background: #dc2626;
+  border-color: #dc2626;
+  color: #ffffff;
+  box-shadow: 0 0 0 6px rgba(220,38,38,0.12);
+}
+.composer__voice.is-transcribing{
+  color: #2563eb;
+}
+.composer__voice-file{
+  display: none;
+}
 .composer__meta{
   margin-top: 10px;
   display:flex;
@@ -1369,6 +1404,11 @@ body{
   border-radius: 10px;
   background: #2563eb;
   box-shadow: 0 8px 20px rgba(37,99,235,0.22);
+}
+.composer__voice{
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
 }
 .composer__send:hover{
   box-shadow: 0 10px 24px rgba(37,99,235,0.26);

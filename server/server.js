@@ -21,6 +21,11 @@ const ALT_AUTH_PASSWORD = String(process.env.ALT_AUTH_PASSWORD || "");
 const ALT_AUTH_SCOPE = String(process.env.ALT_AUTH_SCOPE || "");
 const ALT_AUTH_CLIENT_ID = String(process.env.ALT_AUTH_CLIENT_ID || "");
 const ALT_AUTH_CLIENT_SECRET = String(process.env.ALT_AUTH_CLIENT_SECRET || "");
+const AUDIO_TO_TEXT_URL = String(
+  process.env.AUDIO_TO_TEXT_URL || "http://36.111.80.114:28080/v1/audio-to-text",
+);
+const AUDIO_TO_TEXT_TOKEN = String(process.env.AUDIO_TO_TEXT_TOKEN || "");
+const AUDIO_TO_TEXT_USER = String(process.env.AUDIO_TO_TEXT_USER || "lndx");
 const FEEDBACK_BASE_URL = String(
   process.env.FEEDBACK_BASE_URL || "http://183.78.180.103:5173",
 ).replace(/\/+$/, "");
@@ -438,6 +443,24 @@ async function readBodyJson(req) {
     err.statusCode = 400;
     throw err;
   }
+}
+
+function pickTranscribedText(data) {
+  const sources = [
+    data,
+    data?.data,
+    data?.result,
+    data?.output,
+  ];
+  const keys = ["text", "content", "transcript", "transcription", "message", "answer"];
+  for (const source of sources) {
+    if (!source || typeof source !== "object") continue;
+    for (const key of keys) {
+      const value = String(source[key] || "").trim();
+      if (value) return value;
+    }
+  }
+  return "";
 }
 
 
@@ -2557,6 +2580,66 @@ async function handleFeedbackStatus(req, res, messageId) {
   }
 }
 
+async function handleAudioToText(req, res) {
+  if (!AUDIO_TO_TEXT_URL || !AUDIO_TO_TEXT_TOKEN) {
+    sendJson(res, 500, { error: "服务端缺少语音转文字配置", source: "server-config" });
+    return;
+  }
+
+  const contentType = String(req.headers["content-type"] || "");
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    sendJson(res, 400, { error: "语音请求格式错误，需要 multipart/form-data" });
+    return;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 60000);
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(AUDIO_TO_TEXT_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${AUDIO_TO_TEXT_TOKEN}`,
+        "Content-Type": contentType,
+      },
+      body: req,
+      duplex: "half",
+      signal: controller.signal,
+    });
+  } catch (err) {
+    sendJson(res, 502, {
+      error: `语音转文字服务不可达：${String(err?.message || err || "")}`,
+      source: "audio-to-text",
+    });
+    return;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const raw = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    sendJson(res, upstreamRes.status, formatUpstreamError("语音转文字上游", upstreamRes.status, raw));
+    return;
+  }
+
+  let data = null;
+  try {
+    data = JSON.parse(raw || "{}");
+  } catch {
+    data = null;
+  }
+  if (data && typeof data === "object") {
+    sendJson(res, 200, {
+      ok: true,
+      text: pickTranscribedText(data),
+      raw: data,
+    });
+    return;
+  }
+
+  sendJson(res, 200, { ok: true, text: String(raw || "").trim(), raw });
+}
+
 /**
  * 处理静态资源访问，默认回退到 H5 前端文件。
  *
@@ -2690,6 +2773,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/api/alt-thread") {
       await handleAltThread(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/audio-to-text") {
+      await handleAudioToText(req, res);
       return;
     }
 
