@@ -34,9 +34,7 @@ const AUDIO_TO_TEXT_URL = String(
 );
 const AUDIO_TO_TEXT_TOKEN = String(process.env.AUDIO_TO_TEXT_TOKEN || "");
 const AUDIO_TO_TEXT_USER = String(process.env.AUDIO_TO_TEXT_USER || "lndx");
-const FEEDBACK_BASE_URL = String(
-  process.env.FEEDBACK_BASE_URL || "http://183.78.180.103:5173",
-).replace(/\/+$/, "");
+const FEEDBACK_BASE_URL = String(process.env.FEEDBACK_BASE_URL || "").replace(/\/+$/, "");
 const DB_HOST = String(process.env.DB_HOST || "127.0.0.1");
 const DB_PORT = Number.parseInt(process.env.DB_PORT || "3306", 10);
 const DB_USER = String(process.env.DB_USER || "root");
