@@ -19,6 +19,7 @@
 - 点赞 / 点踩反馈
 - Markdown、图片、链接渲染
 - H5 移动端适配
+- 多入口版本：默认入口 `/`，智改数转诊断入口 `/gongye`
 - Linux 服务器一键同步脚本
 
 ## 架构说明
@@ -53,6 +54,19 @@
 8. 用户点赞 / 点踩时，前端调用 `/api/feedback`，Node 再转发到上游反馈服务。
 9. OAuth 登录通过 `/api/auth-config`、`/api/auth-token`、`/api/auth-userinfo` 完成。
 
+## 多入口版本
+
+当前同一个 Node 服务提供两个入口：
+
+| 入口 | 页面名称 | 默认问题 | 上游配置 |
+| --- | --- | --- | --- |
+| `/` | 政企AI助手 | `question-bank.json` | 使用 ai-wiki 默认配置 |
+| `/gongye` | 智改数转诊断助手 | `question-bank-gongye.json` | 聊天请求追加 `config.agent_config_id = 6` |
+
+版本配置集中在 `h5-chatbot/variants.js`。新增入口时，优先在这里增加配置，再在后端 `APP_ROUTE_PREFIXES` 中加入路径前缀。静态资源仍复用同一个 `index.html`，后端会把 `/gongye/app.js`、`/gongye/styles.css` 等路径映射回 `h5-chatbot/` 下的真实文件。
+
+会话按入口隔离。前端同步会话时会带上 `appVariant`，后端通过 `conversations.app_variant` 和 `user_variant_states` 区分同一用户在不同入口下的历史会话与当前活跃会话。
+
 ## 目录结构
 
 ```text
@@ -67,7 +81,9 @@
 │  ├─ markdown.js
 │  ├─ utils.js
 │  ├─ platform-bridge.js
+│  ├─ variants.js
 │  ├─ question-bank.json
+│  ├─ question-bank-gongye.json
 │  ├─ static/
 │  └─ vendor/
 ├─ server/
@@ -75,12 +91,15 @@
 │  ├─ start.ps1
 │  ├─ start.sh
 │  ├─ .env.example
-│  ├─ sql/init.sql
+│  ├─ sql/
+│  │  ├─ init.sql
+│  │  └─ 20260522_add_app_variant.sql
 │  ├─ data/
 │  └─ logs/
 │     ├─ server-YYYY-MM-DD.log
 │     └─ message-YYYY-MM-DD.log
 ├─ scripts/
+│  ├─ run-sql-file.js
 │  ├─ sync-from-github.sh
 │  └─ sync-from-github.env.example
 ├─ deploy/
@@ -107,8 +126,10 @@
 | `feedback.js` | 反馈模块 | 点赞/点踩、点踩原因弹窗、查询反馈状态、确保拿到可反馈的外部消息 ID |
 | `markdown.js` | Markdown 渲染 | 使用 `markdown-it` 渲染文本、链接、图片、代码块，并做基础安全处理 |
 | `platform-bridge.js` | App 宿主桥接 | 兼容 Android/iOS 宿主能力，尝试读取 App 内登录用户信息 |
+| `variants.js` | 多入口配置 | 根据路径切换标题、logo、问题库和 ai-wiki `agent_config_id` |
 | `utils.js` | 通用工具 | 时间、ID、URL 规范化、错误格式化、会话标题推导、滚动辅助 |
 | `question-bank.json` | 推荐问题库 | 首屏和追问建议的问题来源 |
+| `question-bank-gongye.json` | 智改数转问题库 | `/gongye` 入口的首屏推荐问题来源 |
 | `vendor/` | 第三方前端库 | 当前包含 SSE 解析器和 Markdown 渲染库 |
 | `static/` | 静态图片资源 | 机器人、用户、AI 标识等页面资源 |
 
@@ -189,7 +210,7 @@ OAuth 流程如下：
 | --- | --- |
 | 环境变量常量 | 读取端口、数据库、OAuth、ChatbotAgent、反馈服务等配置 |
 | 日志函数 | `appendJsonLog`、`appendAuthUserInfoLog` 写入每日 JSON 行日志 |
-| 数据库初始化 | `ensureSchema` 启动时检查并补齐 `messages.external_message_id` |
+| 数据库初始化 | `ensureSchema` 启动时检查并补齐 `messages.external_message_id`、`conversations.app_variant`、`user_variant_states` |
 | CORS / JSON 工具 | `corsHeaders`、`sendJson`、`readBodyJson` 处理通用 HTTP 逻辑 |
 | 会话模型规范化 | `normalizeMessage`、`normalizeConversation`、`normalizeUserPayload` |
 | MySQL 会话读写 | `fetchUserConversations`、`syncUserConversations` |
@@ -198,7 +219,7 @@ OAuth 流程如下：
 | ai-wiki 进度识别 | `collectAltToolCalls`、`formatAltToolProgress`、`extractAltProgress` |
 | 反馈 ID 映射 | `resolveFeedbackMessageId` 将流式消息 ID 映射为反馈接口需要的整数 ID |
 | OAuth 代理 | `handleAuthToken`、`handleAuthUserInfo` |
-| 静态文件服务 | `handleStatic` 将 `h5-chatbot/` 作为前端页面目录 |
+| 静态文件服务 | `handleStatic` 将 `h5-chatbot/` 作为前端页面目录，并支持 `/gongye` 路径前缀 |
 | 路由入口 | `http.createServer` 内部按 method + pathname 分发 |
 
 ### 后端路由说明
@@ -225,15 +246,16 @@ OAuth 流程如下：
 
 ### 数据库代码说明
 
-数据库初始化脚本在 `server/sql/init.sql`，核心是三张表：
+数据库初始化脚本在 `server/sql/init.sql`，核心表如下：
 
 | 表 | 作用 | 关键字段 |
 | --- | --- | --- |
 | `users` | 保存聊天用户 | `user_key`、`active_conversation_key` |
-| `conversations` | 保存会话 | `conversation_key`、`title`、`platform`、`dify_conversation_id`、`updated_at_ms` |
+| `user_variant_states` | 保存每个入口的活跃会话 | `user_id`、`app_variant`、`active_conversation_key` |
+| `conversations` | 保存会话 | `app_variant`、`conversation_key`、`title`、`platform`、`dify_conversation_id`、`updated_at_ms` |
 | `messages` | 保存消息 | `role`、`content`、`external_message_id`、`position`、`created_at_ms` |
 
-前端会话同步不是逐条消息增量写入，而是把当前用户的会话快照提交给 `/api/conversations/sync`。后端会规范化 payload，然后写入 users、conversations、messages。`external_message_id` 很关键，它把本地消息和上游消息关联起来，点赞 / 点踩时会用它定位上游消息。
+前端会话同步不是逐条消息增量写入，而是把当前用户、当前入口的会话快照提交给 `/api/conversations/sync`。后端会规范化 payload，然后写入 users、user_variant_states、conversations、messages。`external_message_id` 很关键，它把本地消息和上游消息关联起来，点赞 / 点踩时会用它定位上游消息。
 
 ### 日志代码说明
 
@@ -263,8 +285,9 @@ journalctl -u chatbot -n 100 --no-pager
 | `server/start.sh` | Linux 启动脚本，加载 `.env` 后启动 `node server/server.js` |
 | `server/start.ps1` | Windows 启动脚本，适合本地开发测试 |
 | `deploy/chatbot.service` | systemd 服务定义，用于生产环境守护进程 |
-| `scripts/sync-from-github.sh` | 服务器同步脚本，拉取最新代码、按需安装依赖、执行重启和健康检查 |
-| `scripts/sync-from-github.env.example` | 同步脚本配置模板，定义分支、安装命令、重启命令、健康检查地址 |
+| `scripts/run-sql-file.js` | SQL 执行器，使用项目内 `mysql2` 执行迁移脚本 |
+| `scripts/sync-from-github.sh` | 服务器同步脚本，拉取最新代码、按需安装依赖、执行 SQL 迁移、执行重启和健康检查 |
+| `scripts/sync-from-github.env.example` | 同步脚本配置模板，定义分支、安装命令、迁移脚本、重启命令、健康检查地址 |
 
 同步脚本启动时会自动读取 `scripts/sync-from-github.env`。如果配置了：
 
@@ -274,6 +297,12 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 ```
 
 那么每次同步成功后会自动重启 systemd 服务，并访问健康检查接口确认服务可用。
+
+同步脚本还会读取 `server/.env` 中的数据库配置，并在重启前执行 `SQL_MIGRATION_FILES` 指定的迁移脚本。默认迁移脚本为：
+
+```bash
+server/sql/20260522_add_app_variant.sql
+```
 
 ## 环境准备
 
@@ -350,7 +379,7 @@ cp server/.env.example server/.env
 
 | 变量 | 必填 | 默认值 / 行为 | 说明 |
 | --- | --- | --- | --- |
-| `FEEDBACK_BASE_URL` | 启用反馈时必填 | 无 | 反馈服务基地址 |
+| `FEEDBACK_BASE_URL` | 否 | 空时根据 `ALT_API_URL` 推导 | 反馈服务基地址。通常保持为空，让反馈接口走 ai-wiki 主服务同源地址 |
 | `DIFY_BASE_URL` | 使用 Dify 代理时 | `https://api.dify.ai/v1` | Dify 接口地址 |
 | `DIFY_API_KEY` | 使用 Dify 代理时 | 空 | Dify API Key |
 
@@ -369,13 +398,16 @@ source server/sql/init.sql;
 会创建：
 
 - `users`
+- `user_variant_states`
 - `conversations`
 - `messages`
 
 兼容说明：
 
 - `messages` 表需要包含 `external_message_id`
-- 旧库缺少该字段时，服务启动时会自动尝试补齐
+- `conversations` 表需要包含 `app_variant`
+- 旧库缺少上述字段或 `user_variant_states` 表时，服务启动时会自动尝试补齐
+- 生产环境建议执行迁移脚本：[20260522_add_app_variant.sql](server/sql/20260522_add_app_variant.sql)
 - 若表结构过旧，仍建议重新执行最新初始化脚本
 
 ## 本地运行
@@ -666,6 +698,7 @@ Linux 同步脚本：
 - 拉取指定分支最新代码
 - 本地有未提交改动时中止，避免覆盖
 - 仅在依赖变更时自动安装
+- 可选执行 SQL 迁移脚本
 - 可选执行重启命令
 - 可选执行健康检查
 
@@ -685,6 +718,8 @@ REMOTE_NAME=origin
 TARGET_BRANCH=main
 RUN_INSTALL=1
 INSTALL_CMD="npm ci --omit=dev"
+RUN_SQL_MIGRATIONS=1
+SQL_MIGRATION_FILES="server/sql/20260522_add_app_variant.sql"
 RESTART_CMD="systemctl restart chatbot"
 HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 ```
@@ -700,6 +735,7 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 ### 页面访问
 
 - `http://127.0.0.1:8787/`
+- `http://127.0.0.1:8787/gongye`
 
 如果前端不是从 `8787` 端口打开，建议在设置里将：
 
@@ -714,6 +750,7 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 ### 会话历史
 
 - 通过 `/api/conversations` 和 `/api/conversations/sync` 自动读写
+- 不同入口通过 `appVariant` 隔离历史会话
 - 服务端不可用时会退回本地临时模式
 - 恢复后新会话会继续同步到 MySQL
 
