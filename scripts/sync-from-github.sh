@@ -3,9 +3,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-ENV_FILE="${SYNC_ENV_FILE:-${SCRIPT_DIR}/sync-from-github.env}"
-if [[ -f "${ENV_FILE}" ]]; then
-  printf '[sync] loading config: %s\n' "${ENV_FILE}"
+load_env_file() {
+  local env_file="$1"
+  [[ -f "${env_file}" ]] || return 0
+  printf '[sync] loading config: %s\n' "${env_file}"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     line="${line//$'\r'/}"
     line="${line#$'\xef\xbb\xbf'}"
@@ -19,14 +20,20 @@ if [[ -f "${ENV_FILE}" ]]; then
       value="${value:1:${#value}-2}"
     fi
     export "${key}=${value}"
-  done <"${ENV_FILE}"
-fi
+  done <"${env_file}"
+}
+
+ENV_FILE="${SYNC_ENV_FILE:-${SCRIPT_DIR}/sync-from-github.env}"
+load_env_file "${ENV_FILE}"
 
 APP_DIR="${APP_DIR:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
+SERVER_ENV_FILE="${SERVER_ENV_FILE:-${APP_DIR}/server/.env}"
 REMOTE_NAME="${REMOTE_NAME:-origin}"
 TARGET_BRANCH="${1:-${TARGET_BRANCH:-}}"
 RUN_INSTALL="${RUN_INSTALL:-1}"
 INSTALL_CMD="${INSTALL_CMD:-npm ci --omit=dev}"
+RUN_SQL_MIGRATIONS="${RUN_SQL_MIGRATIONS:-1}"
+SQL_MIGRATION_FILES="${SQL_MIGRATION_FILES:-server/sql/20260522_add_app_variant.sql}"
 RESTART_CMD="${RESTART_CMD:-}"
 HEALTHCHECK_URL="${HEALTHCHECK_URL:-}"
 
@@ -49,7 +56,12 @@ if [[ "${RUN_INSTALL}" == "1" ]]; then
   require_cmd npm
 fi
 
+if [[ "${RUN_SQL_MIGRATIONS}" == "1" ]]; then
+  require_cmd node
+fi
+
 cd "${APP_DIR}"
+load_env_file "${SERVER_ENV_FILE}"
 
 git config --global --add safe.directory "${APP_DIR}" >/dev/null 2>&1 || true
 
@@ -92,6 +104,29 @@ if [[ "${RUN_INSTALL}" == "1" ]]; then
   else
     log "dependencies unchanged, skipping install"
   fi
+fi
+
+if [[ "${RUN_SQL_MIGRATIONS}" == "1" ]]; then
+  if [[ -z "${SQL_MIGRATION_FILES//[[:space:]]/}" ]]; then
+    log "SQL migrations enabled but no files configured, skipping"
+  else
+    read -r -a migration_files <<<"${SQL_MIGRATION_FILES}"
+    resolved_migration_files=()
+    for migration_file in "${migration_files[@]}"; do
+      [[ -n "${migration_file}" ]] || continue
+      if [[ "${migration_file}" = /* ]]; then
+        resolved_migration_files+=("${migration_file}")
+      else
+        resolved_migration_files+=("${APP_DIR}/${migration_file}")
+      fi
+    done
+    if [[ "${#resolved_migration_files[@]}" -gt 0 ]]; then
+      log "running SQL migrations"
+      node "${SCRIPT_DIR}/run-sql-file.js" "${resolved_migration_files[@]}"
+    fi
+  fi
+else
+  log "SQL migrations disabled, skipping"
 fi
 
 if [[ -n "${RESTART_CMD}" ]]; then
