@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS conversations (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id BIGINT UNSIGNED NOT NULL,
+  app_variant VARCHAR(64) NOT NULL DEFAULT 'default',
   conversation_key VARCHAR(64) NOT NULL,
   title VARCHAR(255) NOT NULL,
   platform VARCHAR(16) NOT NULL,
@@ -26,9 +27,19 @@ CREATE TABLE IF NOT EXISTS conversations (
   created_at_ms BIGINT NOT NULL,
   updated_at_ms BIGINT NOT NULL,
   PRIMARY KEY (id),
-  UNIQUE KEY uniq_user_conversation (user_id, conversation_key),
-  KEY idx_user_updated (user_id, updated_at_ms),
+  UNIQUE KEY uniq_user_variant_conversation (user_id, app_variant, conversation_key),
+  KEY idx_user_variant_updated (user_id, app_variant, updated_at_ms),
   CONSTRAINT fk_conversations_user FOREIGN KEY (user_id)
+    REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS user_variant_states (
+  user_id BIGINT UNSIGNED NOT NULL,
+  app_variant VARCHAR(64) NOT NULL DEFAULT 'default',
+  active_conversation_key VARCHAR(64) DEFAULT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, app_variant),
+  CONSTRAINT fk_user_variant_states_user FOREIGN KEY (user_id)
     REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

@@ -100,6 +100,7 @@ const PUBLIC_DIR = path.resolve(__dirname, "..", "h5-chatbot");
 const LOG_DIR = path.resolve(__dirname, "logs");
 const MESSAGE_LOG_PREFIX = "message";
 const SERVER_LOG_PREFIX = "server";
+const APP_ROUTE_PREFIXES = new Set(["gongye"]);
 const EMPTY_ALT_ANSWER = "抱歉，本次上游服务没有返回可展示的内容。请稍后重试，或换个问法再试一次。";
 const ALT_RPM_RATE_LIMIT_ANSWER = "会话内容达到模型每分钟限制，请稍侯继续提问";
 const ALT_RATE_LIMIT_ANSWER = "当前模型请求过于频繁或上下文过长，已触发上游限流。请稍后重试，或新建对话/缩短问题后再试。";
@@ -178,7 +179,7 @@ function appendClientLog(payload) {
 async function ensureSchema() {
   const conn = await pool.getConnection();
   try {
-    const [rows] = await conn.execute(
+    const [messageRows] = await conn.execute(
       `SELECT COUNT(*) AS count
        FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = ?
@@ -186,12 +187,39 @@ async function ensureSchema() {
          AND COLUMN_NAME = 'external_message_id'`,
       [DB_NAME],
     );
-    const count = Number(rows?.[0]?.count || 0);
-    if (!count) {
+    const messageCount = Number(messageRows?.[0]?.count || 0);
+    if (!messageCount) {
       await conn.execute(
         "ALTER TABLE messages ADD COLUMN external_message_id VARCHAR(128) DEFAULT NULL AFTER content",
       );
     }
+
+    const [variantRows] = await conn.execute(
+      `SELECT COUNT(*) AS count
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = ?
+         AND TABLE_NAME = 'conversations'
+         AND COLUMN_NAME = 'app_variant'`,
+      [DB_NAME],
+    );
+    const variantCount = Number(variantRows?.[0]?.count || 0);
+    if (!variantCount) {
+      await conn.execute(
+        "ALTER TABLE conversations ADD COLUMN app_variant VARCHAR(64) NOT NULL DEFAULT 'default' AFTER user_id",
+      );
+    }
+
+    await conn.execute(
+      `CREATE TABLE IF NOT EXISTS user_variant_states (
+        user_id BIGINT UNSIGNED NOT NULL,
+        app_variant VARCHAR(64) NOT NULL DEFAULT 'default',
+        active_conversation_key VARCHAR(64) DEFAULT NULL,
+        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, app_variant),
+        CONSTRAINT fk_user_variant_states_user FOREIGN KEY (user_id)
+          REFERENCES users(id) ON DELETE CASCADE
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+    );
   } finally {
     conn.release();
   }
@@ -535,12 +563,13 @@ async function handleChatMessages(req, res) {
  */
 async function handleConversationsList(req, res, url) {
   const userId = String(url.searchParams.get("userId") || "");
+  const appVariant = String(url.searchParams.get("appVariant") || "default");
   if (!userId) {
     sendJson(res, 400, { error: "Missing userId" });
     return;
   }
 
-  const data = await conversationService.fetchUserConversations(userId);
+  const data = await conversationService.fetchUserConversations(userId, appVariant);
   sendJson(res, 200, { items: data.items || [], activeId: data.activeId || "" });
 }
 
@@ -554,12 +583,13 @@ async function handleConversationsList(req, res, url) {
 async function handleConversationsSync(req, res) {
   const body = await readBodyJson(req);
   const userId = String(body?.userId || "");
+  const appVariant = String(body?.appVariant || "default");
   if (!userId) {
     sendJson(res, 400, { error: "Missing userId" });
     return;
   }
 
-  const result = await conversationService.syncUserConversations(userId, body);
+  const result = await conversationService.syncUserConversations(userId, body, appVariant);
   sendJson(res, 200, { ok: true, messageIds: result.messageIds || {} });
 }
 
@@ -2294,6 +2324,11 @@ async function handleStatic(req, res) {
   const url = new URL(req.url || "/", "http://localhost");
   let pathname = decodeURIComponent(url.pathname || "/");
   if (pathname === "/") pathname = "/index.html";
+
+  const parts = pathname.split("/").filter(Boolean);
+  if (APP_ROUTE_PREFIXES.has(parts[0])) {
+    pathname = parts.length === 1 ? "/index.html" : `/${parts.slice(1).join("/")}`;
+  }
 
   const requested = path.normalize(pathname).replace(/^([/\\])+/, "");
   const filePath = path.resolve(PUBLIC_DIR, requested);

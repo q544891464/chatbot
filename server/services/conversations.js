@@ -38,8 +38,13 @@ function normalizeUserPayload(payload) {
   return { items, activeId };
 }
 
+function normalizeAppVariant(appVariant) {
+  return String(appVariant || "default").trim().slice(0, 64) || "default";
+}
+
 function createConversationService(pool) {
-  async function fetchUserConversations(userKey) {
+  async function fetchUserConversations(userKey, appVariant = "default") {
+    const variant = normalizeAppVariant(appVariant);
     const conn = await pool.getConnection();
     try {
       const [userRows] = await conn.execute(
@@ -49,10 +54,18 @@ function createConversationService(pool) {
       if (!userRows.length) return { items: [], activeId: "" };
 
       const userId = userRows[0].id;
-      const activeKey = String(userRows[0].active_conversation_key || "");
+      const [stateRows] = await conn.execute(
+        "SELECT active_conversation_key FROM user_variant_states WHERE user_id = ? AND app_variant = ?",
+        [userId, variant],
+      );
+      const activeKey = String(
+        stateRows?.[0]?.active_conversation_key ||
+          (variant === "default" ? userRows[0].active_conversation_key : "") ||
+          "",
+      );
       const [convRows] = await conn.execute(
-        "SELECT id, conversation_key, title, platform, dify_conversation_id, created_at_ms, updated_at_ms FROM conversations WHERE user_id = ? ORDER BY updated_at_ms DESC",
-        [userId],
+        "SELECT id, conversation_key, title, platform, dify_conversation_id, created_at_ms, updated_at_ms FROM conversations WHERE user_id = ? AND app_variant = ? ORDER BY updated_at_ms DESC",
+        [userId, variant],
       );
 
       if (!convRows.length) return { items: [], activeId: "" };
@@ -98,7 +111,8 @@ function createConversationService(pool) {
     }
   }
 
-  async function syncUserConversations(userKey, payload) {
+  async function syncUserConversations(userKey, payload, appVariant = "default") {
+    const variant = normalizeAppVariant(appVariant);
     const normalized = normalizeUserPayload(payload);
     const messageIds = {};
     const conn = await pool.getConnection();
@@ -106,14 +120,18 @@ function createConversationService(pool) {
       await conn.beginTransaction();
 
       const [userResult] = await conn.execute(
-        "INSERT INTO users (user_key, active_conversation_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE active_conversation_key = VALUES(active_conversation_key), id = LAST_INSERT_ID(id)",
-        [userKey, normalized.activeId || null],
+        "INSERT INTO users (user_key, active_conversation_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE active_conversation_key = IF(? = 'default', VALUES(active_conversation_key), active_conversation_key), id = LAST_INSERT_ID(id)",
+        [userKey, variant === "default" ? normalized.activeId || null : null, variant],
       );
       const userId = userResult.insertId;
+      await conn.execute(
+        "INSERT INTO user_variant_states (user_id, app_variant, active_conversation_key) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE active_conversation_key = VALUES(active_conversation_key)",
+        [userId, variant, normalized.activeId || null],
+      );
 
       const [existingRows] = await conn.execute(
-        "SELECT id, conversation_key FROM conversations WHERE user_id = ?",
-        [userId],
+        "SELECT id, conversation_key FROM conversations WHERE user_id = ? AND app_variant = ?",
+        [userId, variant],
       );
       const existingMap = new Map(existingRows.map((row) => [row.conversation_key, row.id]));
       const keepKeys = new Set();
@@ -135,8 +153,8 @@ function createConversationService(pool) {
           );
         } else {
           const [insertResult] = await conn.execute(
-            "INSERT INTO conversations (user_id, conversation_key, title, platform, dify_conversation_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            [userId, convKey, title, platform, difyConversationId, createdAtMs, updatedAtMs],
+            "INSERT INTO conversations (user_id, app_variant, conversation_key, title, platform, dify_conversation_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [userId, variant, convKey, title, platform, difyConversationId, createdAtMs, updatedAtMs],
           );
           convId = insertResult.insertId;
           existingMap.set(convKey, convId);
@@ -170,11 +188,11 @@ function createConversationService(pool) {
         const keys = Array.from(keepKeys);
         const placeholders = keys.map(() => "?").join(",");
         await conn.execute(
-          `DELETE FROM conversations WHERE user_id = ? AND conversation_key NOT IN (${placeholders})`,
-          [userId, ...keys],
+          `DELETE FROM conversations WHERE user_id = ? AND app_variant = ? AND conversation_key NOT IN (${placeholders})`,
+          [userId, variant, ...keys],
         );
       } else {
-        await conn.execute("DELETE FROM conversations WHERE user_id = ?", [userId]);
+        await conn.execute("DELETE FROM conversations WHERE user_id = ? AND app_variant = ?", [userId, variant]);
       }
 
       await conn.commit();
@@ -195,6 +213,7 @@ function createConversationService(pool) {
 
 module.exports = {
   createConversationService,
+  normalizeAppVariant,
   normalizeConversation,
   normalizeMessage,
   normalizeUserPayload,

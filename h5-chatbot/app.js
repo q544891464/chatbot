@@ -50,6 +50,7 @@ import {
   setBusyState,
 } from "./ui-state.js";
 import { createVoiceInput } from "./voice.js";
+import { getVariant } from "./variants.js";
 const STORAGE_KEY = "h5ChatbotConfig:v1";
 const AGENT_ID = "ChatbotAgent";
 const FEEDBACK_ENDPOINT_PATH = "/feedback";
@@ -61,6 +62,8 @@ const DEFAULT_USER_META = {
 };
 const el = {
   connHint: document.getElementById("connHint"),
+  topbarName: document.querySelector(".topbar__name"),
+  topbarLogoImg: document.querySelector(".topbar__logo img"),
   messages: document.getElementById("messages"),
   input: document.getElementById("input"),
   voiceBtn: document.getElementById("voiceBtn"),
@@ -103,6 +106,7 @@ const el = {
   videoViewerTitle: document.getElementById("videoViewerTitle"),
   videoViewerHint: document.getElementById("videoViewerHint"),
 };
+const appVariant = getVariant();
 /**
  * 从本地存储恢复页面配置，并补齐默认值。
  *
@@ -238,13 +242,27 @@ function setAccessDenied(denied) {
   setAccessDeniedState(el, state, denied);
 }
 
+function applyVariantBranding() {
+  const title = String(state.variant.title || "政企AI助手");
+  document.title = title;
+  if (el.topbarName) el.topbarName.textContent = title;
+  if (el.topbarLogoImg) {
+    el.topbarLogoImg.src = state.variant.logo || "./static/AIlogo.png";
+    el.topbarLogoImg.alt = title;
+  }
+}
+
 /**
  * 从后端会话存储服务拉取当前用户的会话列表。
  *
  * @returns {Promise<{items: Array, activeId: string}>} 会话列表与当前激活会话 ID。
  */
 async function fetchConversationsFromServer() {
-  const url = `${getStoreBase()}/conversations?userId=${encodeURIComponent(state.config.userId)}`;
+  const params = new URLSearchParams({
+    userId: state.config.userId,
+    appVariant: state.variant.id,
+  });
+  const url = `${getStoreBase()}/conversations?${params.toString()}`;
   const res = await fetch(url, {
     headers: { "Content-Type": "application/json" },
   });
@@ -309,6 +327,7 @@ async function syncConversationsToServer(payload) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       userId: state.config.userId,
+      appVariant: state.variant.id,
       activeId: payload.activeId,
       items: payload.items,
     }),
@@ -373,6 +392,7 @@ const DEFAULT_QUESTION_BANK = [
 ];
 const state = {
   config: initialConfig,
+  variant: appVariant,
   conversations: [initialConversation],
   activeId: initialConversation.id,
   inFlight: null,
@@ -392,7 +412,10 @@ const viewportState = {
   height: 0,
   orientation: "",
 };
-const localConversationStorage = createLocalConversationStorage(() => state.config.userId);
+const localConversationStorage = createLocalConversationStorage(
+  () => state.config.userId,
+  () => state.variant.id,
+);
 const voiceInput = createVoiceInput({
   el,
   state,
@@ -474,7 +497,7 @@ async function initConversations() {
  */
 async function loadQuestionBank() {
   try {
-    const res = await fetch("./question-bank.json", { cache: "no-store" });
+    const res = await fetch(state.variant.questionBank, { cache: "no-store" });
     if (!res.ok) throw new Error("load failed");
     const data = await res.json();
     const items = Array.isArray(data)
@@ -661,10 +684,13 @@ function createEmptyStateNode() {
   card.className = "empty__card";
   const icon = document.createElement("div");
   icon.className = "empty__icon";
-  icon.innerHTML = `<img src="./static/AIlogo.png" alt="政企AI助手" />`;
+  const logoSrc = state.variant.logo || "./static/AIlogo.png";
+  const titleText = String(state.variant.title || "政企AI助手");
+  const welcomeTitle = String(state.variant.welcomeTitle || `你好！我是${titleText}`);
+  icon.innerHTML = `<img src="${logoSrc}" alt="${titleText}" />`;
   const title = document.createElement("div");
   title.className = "empty__title";
-  title.textContent = "你好！我是政企AI助手";
+  title.textContent = welcomeTitle;
   const sub = document.createElement("div");
   sub.className = "empty__sub";
   sub.textContent = "开始对话吧～问题描述包括越多关键信息，回答越精准哈～";
@@ -1193,6 +1219,7 @@ function getChatApiCtx() {
     getStoreBase,
     getUserMeta,
     AGENT_ID,
+    variant: state.variant,
   };
 }
 /**
@@ -1673,6 +1700,7 @@ if (IS_MOBILE) {
  * @returns {Promise<void>}
  */
 async function bootstrap() {
+  applyVariantBranding();
   logClientEvent("client:open", getBridgeDiagnostics());
   await initPlatformUser();
   const hasAuthCode = await captureAuthCodeFromUrl(getAuthCtx());

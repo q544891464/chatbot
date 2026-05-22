@@ -57,6 +57,15 @@ function pickThreadId(data) {
   return "";
 }
 
+function buildAgentConfig(ctx, threadId) {
+  const config = { thread_id: threadId || null };
+  const agentConfigId = Number(ctx.variant?.agentConfigId || 0);
+  if (agentConfigId > 0) {
+    config.agent_config_id = agentConfigId;
+  }
+  return config;
+}
+
 /**
  * 调用本地代理创建上游线程，并返回线程 ID。
  *
@@ -65,12 +74,16 @@ function pickThreadId(data) {
  * @returns {Promise<string>} 上游返回的线程 ID。
  */
 export async function createAgentThread(ctx, title) {
-  const { getStoreBase, getUserMeta, AGENT_ID } = ctx;
+  const { getStoreBase, getUserMeta, AGENT_ID, variant } = ctx;
   const url = `${getStoreBase()}/alt-thread`;
   const payload = {
     title: String(title || "新对话"),
     agent_id: AGENT_ID,
-    metadata: getUserMeta(),
+    metadata: {
+      ...getUserMeta(),
+      appVariant: String(variant?.id || "default"),
+      ...(variant?.agentConfigId ? { agentConfigId: Number(variant.agentConfigId) } : {}),
+    },
   };
   console.log("[Chatbot] create thread payload:", payload);
 
@@ -110,7 +123,7 @@ export async function createAgentThread(ctx, title) {
 export async function agentChat(ctx, { query, signal, threadId }) {
   const { getStoreBase } = ctx;
   const url = `${getStoreBase()}/alt-chat`;
-  const config = { thread_id: threadId || null };
+  const config = buildAgentConfig(ctx, threadId);
   const payload = { query, config };
   console.log("[Chatbot] chat payload:", payload);
 
@@ -251,7 +264,7 @@ export async function agentChatStream(
 ) {
   const { getStoreBase } = ctx;
   const url = `${getStoreBase()}/alt-chat-stream`;
-  const config = { thread_id: threadId || null };
+  const config = buildAgentConfig(ctx, threadId);
   const payload = { query, config };
   console.log("[Chatbot] chat stream payload:", payload);
   const requestId = createStreamRequestId();

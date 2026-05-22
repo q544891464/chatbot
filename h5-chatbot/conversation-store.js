@@ -43,8 +43,14 @@ export function createConversation(seed = {}) {
   });
 }
 
-export function createLocalConversationStorage(getUserId) {
+export function createLocalConversationStorage(getUserId, getVariantId = () => "default") {
   function getKey(userId = getUserId()) {
+    const id = String(userId || "anonymous").trim() || "anonymous";
+    const variant = String(getVariantId() || "default").trim() || "default";
+    return `${LOCAL_CONVERSATION_KEY}:${variant}:${id}`;
+  }
+
+  function getLegacyUserKey(userId = getUserId()) {
     const id = String(userId || "anonymous").trim() || "anonymous";
     return `${LOCAL_CONVERSATION_KEY}:${id}`;
   }
@@ -58,7 +64,11 @@ export function createLocalConversationStorage(getUserId) {
   }
 
   function load() {
-    return safeJsonParse(localStorage.getItem(getKey()) || "null", {
+    const raw = localStorage.getItem(getKey()) ||
+      (String(getVariantId() || "default") === "default"
+        ? localStorage.getItem(getLegacyUserKey())
+        : "");
+    return safeJsonParse(raw || "null", {
       items: [],
       activeId: "",
     });
@@ -75,6 +85,7 @@ export function createLocalConversationStorage(getUserId) {
   return {
     clearLegacy,
     getKey,
+    getLegacyUserKey,
     load,
     loadLegacy,
     save,
