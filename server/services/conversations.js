@@ -160,28 +160,45 @@ function createConversationService(pool) {
           existingMap.set(convKey, convId);
         }
 
-        await conn.execute("DELETE FROM messages WHERE conversation_id = ?", [convId]);
         const messages = Array.isArray(conv.messages) ? conv.messages.map(normalizeMessage) : [];
-        if (messages.length) {
-          const values = messages.map((msg, idx) => [
-            convId,
-            msg.role === "assistant" ? "assistant" : "user",
-            String(msg.content || ""),
-            String(msg.time || ""),
-            idx,
-            updatedAtMs,
-            msg.externalMessageId ? String(msg.externalMessageId) : null,
-          ]);
-          await conn.query(
-            "INSERT INTO messages (conversation_id, role, content, time_label, position, created_at_ms, external_message_id) VALUES ?",
-            [values],
-          );
-        }
-        const [idRows] = await conn.execute(
-          "SELECT id FROM messages WHERE conversation_id = ? ORDER BY position",
+        const [existingMessageRows] = await conn.execute(
+          "SELECT id FROM messages WHERE conversation_id = ?",
           [convId],
         );
-        messageIds[convKey] = idRows.map((row) => row.id);
+        const existingMessageIds = new Set(existingMessageRows.map((row) => Number(row.id)));
+        const keepMessageIds = [];
+
+        for (const [idx, msg] of messages.entries()) {
+          const role = msg.role === "assistant" ? "assistant" : "user";
+          const content = String(msg.content || "");
+          const timeLabel = String(msg.time || "");
+          const externalMessageId = msg.externalMessageId ? String(msg.externalMessageId) : null;
+          const numericId = Number.parseInt(String(msg.id || ""), 10);
+          if (Number.isFinite(numericId) && existingMessageIds.has(numericId)) {
+            await conn.execute(
+              "UPDATE messages SET role = ?, content = ?, time_label = ?, position = ?, created_at_ms = ?, external_message_id = ? WHERE id = ? AND conversation_id = ?",
+              [role, content, timeLabel, idx, updatedAtMs, externalMessageId, numericId, convId],
+            );
+            keepMessageIds.push(numericId);
+          } else {
+            const [insertMessageResult] = await conn.execute(
+              "INSERT INTO messages (conversation_id, role, content, time_label, position, created_at_ms, external_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              [convId, role, content, timeLabel, idx, updatedAtMs, externalMessageId],
+            );
+            keepMessageIds.push(insertMessageResult.insertId);
+          }
+        }
+
+        if (keepMessageIds.length) {
+          const placeholders = keepMessageIds.map(() => "?").join(",");
+          await conn.execute(
+            `DELETE FROM messages WHERE conversation_id = ? AND id NOT IN (${placeholders})`,
+            [convId, ...keepMessageIds],
+          );
+        } else {
+          await conn.execute("DELETE FROM messages WHERE conversation_id = ?", [convId]);
+        }
+        messageIds[convKey] = keepMessageIds;
       }
 
       if (keepKeys.size) {
