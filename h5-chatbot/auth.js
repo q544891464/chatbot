@@ -84,7 +84,11 @@ export function updateAuthDisplay(ctx) {
  * @returns {Promise<object>} 后端返回的认证配置。
  */
 async function fetchAuthConfig(getStoreBase) {
-  const url = `${getStoreBase()}/auth-config`;
+  const params = new URLSearchParams();
+  const variant = String(window.__CHATBOT_APP_VARIANT__ || "").trim();
+  if (variant) params.set("appVariant", variant);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const url = `${getStoreBase()}/auth-config${suffix}`;
   let res;
   try {
     res = await fetch(url, { headers: { "Content-Type": "application/json" } });
@@ -107,12 +111,13 @@ async function fetchAuthConfig(getStoreBase) {
  */
 async function exchangeAuthToken(getStoreBase, code, redirectUri) {
   const url = `${getStoreBase()}/auth-token`;
+  const appVariant = String(window.__CHATBOT_APP_VARIANT__ || "").trim();
   let res;
   try {
     res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, redirectUri }),
+      body: JSON.stringify({ code, redirectUri, appVariant }),
     });
   } catch (err) {
     throw new Error(formatRuntimeError(err, "换取 Token 失败"));

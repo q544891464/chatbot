@@ -107,6 +107,7 @@ const el = {
   videoViewerHint: document.getElementById("videoViewerHint"),
 };
 const appVariant = getVariant();
+window.__CHATBOT_APP_VARIANT__ = appVariant.id;
 /**
  * 从本地存储恢复页面配置，并补齐默认值。
  *
@@ -1723,8 +1724,8 @@ async function bootstrap() {
   updateAuthDisplay(getAuthCtx());
   if (!hasPlatformUser && !hasAuthCode) {
     const result = await tryLoginWithStoredToken(getAuthCtx());
-    if (result.needsAuth) {
-      setTips("认证失效，正在重新认证...");
+    if (result.needsAuth || result.reason === "missing_token") {
+      setTips(result.needsAuth ? "认证失效，正在重新认证..." : "正在跳转登录认证...");
       startAuthFlow(getAuthCtx());
       return;
     }

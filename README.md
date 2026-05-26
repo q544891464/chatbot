@@ -58,14 +58,16 @@
 
 当前同一个 Node 服务提供两个入口：
 
-| 入口 | 页面名称 | 默认问题 | 上游配置 |
-| --- | --- | --- | --- |
-| `/` | 政企AI助手 | `question-bank.json` | 使用 ai-wiki 默认配置 |
-| `/gongye` | 智改数转诊断助手 | `question-bank-gongye.json` | 聊天请求追加 `config.agent_config_id = 6` |
+| 入口 | 页面名称 | 默认问题 | 上游配置 | OAuth 配置 |
+| --- | --- | --- | --- | --- |
+| `/` | 政企AI助手 | `question-bank.json` | 使用 ai-wiki 默认配置 | 使用 `AUTH_CLIENT_ID`、`AUTH_CLIENT_SECRET`、`AUTH_REDIRECT_URI` |
+| `/gongye` | 智改数转诊断助手 | `question-bank-gongye.json` | 聊天请求追加 `config.agent_config_id = 6` | 使用 `AUTH_GONGYE_CLIENT_ID`、`AUTH_GONGYE_CLIENT_SECRET`、`AUTH_GONGYE_REDIRECT_URI` |
 
 版本配置集中在 `h5-chatbot/variants.js`。新增入口时，优先在这里增加配置，再在后端 `APP_ROUTE_PREFIXES` 中加入路径前缀。静态资源仍复用同一个 `index.html`，后端会把 `/gongye/app.js`、`/gongye/styles.css` 等路径映射回 `h5-chatbot/` 下的真实文件。
 
 会话按入口隔离。前端同步会话时会带上 `appVariant`，后端通过 `conversations.app_variant` 和 `user_variant_states` 区分同一用户在不同入口下的历史会话与当前活跃会话。
+
+OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带上当前入口的 `appVariant`，后端默认入口返回默认应用配置，`/gongye` 返回工业应用配置；两者可以共用同一个认证网关。
 
 ## 目录结构
 
@@ -173,12 +175,14 @@
 
 OAuth 流程如下：
 
-1. 用户点击登录按钮，`startAuthFlow` 请求 `/api/auth-config`。
+1. 用户进入页面后，若没有宿主桥用户信息、URL 入口用户信息和本地 token，`startAuthFlow` 会请求 `/api/auth-config` 并跳转登录。
 2. 前端拼接授权 URL，带上 `client_id`、`redirect_uri`、`scope`、`state` 后跳转。
-3. OAuth 服务回调到 `AUTH_REDIRECT_URI`，URL 上带 `code` 和 `state`。
+3. OAuth 服务回调到当前入口对应的 `redirect_uri`，URL 上带 `code` 和 `state`。
 4. `captureAuthCodeFromUrl` 读取 code，调用 `/api/auth-token` 换取 token。
 5. 前端拿到 access token 后调用 `/api/auth-userinfo` 获取用户信息。
 6. `applyUserInfoFromResponse` 将 `name`、`phone_number`、`orgName` 映射到页面状态。
+
+默认入口和 `/gongye` 可以配置不同 OAuth 应用。前端会按当前入口传递 `appVariant`，后端在 `/api/auth-config` 和 `/api/auth-token` 中使用同一套入口判断，避免 `/gongye` 授权码被默认应用的 `client_secret` 兑换。
 
 为了方便排查登录问题，当前还会把前端实际拿到的用户信息上报到 `/api/auth-userinfo-log`，后端写入 `server-YYYY-MM-DD.log`，事件名为 `auth:userinfo:client`。这类日志包含用户敏感信息，只建议在调试阶段开启或严格限制服务器日志访问权限。
 
@@ -229,8 +233,8 @@ OAuth 流程如下：
 | 方法 | 路径 | 处理函数 | 用途 |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | 内联处理 | 健康检查，确认 Node 服务可访问 |
-| `GET` | `/api/auth-config` | 内联处理 | 返回前端发起 OAuth 所需的授权地址、client_id、redirect_uri、scope |
-| `POST` | `/api/auth-token` | `handleAuthToken` | 用授权码换 access token / refresh token |
+| `GET` | `/api/auth-config` | 内联处理 | 返回前端发起 OAuth 所需的授权地址、client_id、redirect_uri、scope；支持 `appVariant` |
+| `POST` | `/api/auth-token` | `handleAuthToken` | 用授权码换 access token / refresh token；请求体可带 `appVariant` |
 | `GET` | `/api/auth-userinfo` | `handleAuthUserInfo` | 使用 access token 请求 OAuth userinfo |
 | `POST` | `/api/auth-userinfo-log` | `handleAuthUserInfoClientLog` | 记录前端实际拿到的用户信息，便于调试 |
 | `GET` | `/api/conversations` | `handleConversationsList` | 按 userId 读取会话列表 |
@@ -359,10 +363,32 @@ cp server/.env.example server/.env
 | `AUTH_AUTHORIZE_PATH` | 否 | `/seal/oauth2/authorize` | 授权地址路径 |
 | `AUTH_TOKEN_PATH` | 否 | `/seal/oauth2/token` | token 地址路径 |
 | `AUTH_USERINFO_PATH` | 否 | `/seal/userinfo` | userinfo 地址路径 |
-| `AUTH_CLIENT_ID` | 启用认证时必填 | 空 | OAuth client_id |
-| `AUTH_CLIENT_SECRET` | 启用认证时必填 | 空 | OAuth client_secret |
-| `AUTH_REDIRECT_URI` | 启用认证时必填 | 空 | OAuth 回调地址 |
+| `AUTH_CLIENT_ID` | 启用认证时必填 | 空 | 默认入口 `/` 的 OAuth client_id |
+| `AUTH_CLIENT_SECRET` | 启用认证时必填 | 空 | 默认入口 `/` 的 OAuth client_secret |
+| `AUTH_REDIRECT_URI` | 启用认证时必填 | 空 | 默认入口 `/` 的 OAuth 回调地址 |
+| `AUTH_GONGYE_CLIENT_ID` | 否 | 回退到 `AUTH_CLIENT_ID` | `/gongye` 入口的 OAuth client_id |
+| `AUTH_GONGYE_CLIENT_SECRET` | 否 | 回退到 `AUTH_CLIENT_SECRET` | `/gongye` 入口的 OAuth client_secret |
+| `AUTH_GONGYE_REDIRECT_URI` | 否 | 回退到 `AUTH_REDIRECT_URI` | `/gongye` 入口的 OAuth 回调地址 |
 | `AUTH_SCOPE` | 否 | 空 | OAuth scope |
+
+配置示例：
+
+```env
+AUTH_SERVER_DOMAIN=http://imtwo.zdxlz.com
+AUTH_AUTHORIZE_PATH=/seal/oauth2/authorize
+AUTH_TOKEN_PATH=/seal/oauth2/token
+AUTH_USERINFO_PATH=/seal/userinfo
+
+AUTH_CLIENT_ID=<默认入口应用 appid>
+AUTH_CLIENT_SECRET=<默认入口应用 appsecret>
+AUTH_REDIRECT_URI=http://182.92.153.82:8787/
+
+AUTH_GONGYE_CLIENT_ID=<工业入口应用 appid>
+AUTH_GONGYE_CLIENT_SECRET=<工业入口应用 appsecret>
+AUTH_GONGYE_REDIRECT_URI=http://182.92.153.82:8787/gongye
+
+AUTH_SCOPE=openid profile phone email address
+```
 
 ### MySQL 配置
 
@@ -866,6 +892,8 @@ curl http://127.0.0.1:8787/api/health
 - `AUTH_CLIENT_ID`
 - `AUTH_CLIENT_SECRET`
 - `AUTH_REDIRECT_URI`
+- `/gongye` 入口还需要检查 `AUTH_GONGYE_CLIENT_ID`、`AUTH_GONGYE_CLIENT_SECRET`、`AUTH_GONGYE_REDIRECT_URI`
+- 认证平台后台登记的 `redirect_uri` 必须和当前入口完全一致，例如默认入口是 `/`，工业入口是 `/gongye`
 
 ### 5. 看不到历史会话
 

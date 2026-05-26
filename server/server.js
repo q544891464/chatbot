@@ -49,6 +49,9 @@ const AUTH_CLIENT_ID = String(process.env.AUTH_CLIENT_ID || "");
 const AUTH_CLIENT_SECRET = String(process.env.AUTH_CLIENT_SECRET || "");
 const AUTH_REDIRECT_URI = String(process.env.AUTH_REDIRECT_URI || "");
 const AUTH_SCOPE = String(process.env.AUTH_SCOPE || "");
+const AUTH_GONGYE_CLIENT_ID = String(process.env.AUTH_GONGYE_CLIENT_ID || "");
+const AUTH_GONGYE_CLIENT_SECRET = String(process.env.AUTH_GONGYE_CLIENT_SECRET || "");
+const AUTH_GONGYE_REDIRECT_URI = String(process.env.AUTH_GONGYE_REDIRECT_URI || "");
 const URL_ENTRY_VERIFY_URL = String(process.env.URL_ENTRY_VERIFY_URL || process.env.AUTH_URL_ENTRY_VERIFY_URL || "");
 
 const DEFAULT_FETCH_TIMEOUT_MS = parseDurationMs(process.env.FETCH_TIMEOUT_MS, 15_000);
@@ -262,6 +265,29 @@ function getAuthTokenUrlBase() {
  */
 function getAuthUserInfoUrlBase() {
   return buildAuthUrl(AUTH_USERINFO_PATH);
+}
+
+function normalizeAuthVariant(appVariant) {
+  return String(appVariant || "default").trim() === "gongye" ? "gongye" : "default";
+}
+
+function pickOAuthConfig(appVariant, redirectUri = "") {
+  const uri = String(redirectUri || "").trim();
+  const variant = uri.includes("/gongye") ? "gongye" : normalizeAuthVariant(appVariant);
+  if (variant === "gongye") {
+    return {
+      variant,
+      clientId: AUTH_GONGYE_CLIENT_ID || AUTH_CLIENT_ID,
+      clientSecret: AUTH_GONGYE_CLIENT_SECRET || AUTH_CLIENT_SECRET,
+      redirectUri: AUTH_GONGYE_REDIRECT_URI || AUTH_REDIRECT_URI,
+    };
+  }
+  return {
+    variant,
+    clientId: AUTH_CLIENT_ID,
+    clientSecret: AUTH_CLIENT_SECRET,
+    redirectUri: AUTH_REDIRECT_URI,
+  };
 }
 
 /**
@@ -1743,14 +1769,15 @@ async function handleAuthToken(req, res) {
     sendJson(res, 500, { error: "服务端缺少 AUTH_SERVER_DOMAIN 配置", source: "server-config" });
     return;
   }
-  if (!AUTH_CLIENT_ID || !AUTH_CLIENT_SECRET) {
+  const body = await readBodyJson(req);
+  const redirectUri = String(body?.redirectUri || AUTH_REDIRECT_URI || "");
+  const oauthConfig = pickOAuthConfig(body?.appVariant, redirectUri);
+  if (!oauthConfig.clientId || !oauthConfig.clientSecret) {
     sendJson(res, 500, { error: "服务端缺少 AUTH_CLIENT_ID 或 AUTH_CLIENT_SECRET 配置", source: "server-config" });
     return;
   }
 
-  const body = await readBodyJson(req);
   const code = String(body?.code || "");
-  const redirectUri = String(body?.redirectUri || AUTH_REDIRECT_URI || "");
   if (!code) {
     sendJson(res, 400, { error: "Missing code" });
     return;
@@ -1762,8 +1789,8 @@ async function handleAuthToken(req, res) {
 
   const params = new URLSearchParams();
   params.set("grant_type", "authorization_code");
-  params.set("client_id", AUTH_CLIENT_ID);
-  params.set("client_secret", AUTH_CLIENT_SECRET);
+  params.set("client_id", oauthConfig.clientId);
+  params.set("client_secret", oauthConfig.clientSecret);
   params.set("code", code);
   params.set("redirect_uri", redirectUri);
 
@@ -2354,12 +2381,15 @@ async function handleStatic(req, res) {
 }
 
 const server = http.createServer(createApiRouter({
-  authConfig: () => ({
-    authorizeUrlBase: getAuthAuthorizeUrlBase(),
-    clientId: AUTH_CLIENT_ID,
-    redirectUri: AUTH_REDIRECT_URI,
-    scope: AUTH_SCOPE,
-  }),
+  authConfig: (appVariant) => {
+    const oauthConfig = pickOAuthConfig(appVariant);
+    return {
+      authorizeUrlBase: getAuthAuthorizeUrlBase(),
+      clientId: oauthConfig.clientId,
+      redirectUri: oauthConfig.redirectUri,
+      scope: AUTH_SCOPE,
+    };
+  },
   corsHeaders,
   formatInternalError,
   handleAltChat,
