@@ -380,6 +380,17 @@ function flushLocalConversationSave() {
   }
   saveConversationsLocalOnly();
 }
+
+function openFreshConversation() {
+  const conv = createConversation({ platform: "agent" });
+  state.conversations = state.conversations.filter((item) =>
+    item.messages.length || item.conversationId || item.id === state.activeId,
+  );
+  state.conversations.unshift(conv);
+  state.activeId = conv.id;
+  sortConversations();
+}
+
 const initialConfig = loadConfig();
 saveConfig(initialConfig);
 const initialConversation = createConversation({ platform: "agent" });
@@ -462,8 +473,7 @@ async function initConversations() {
     const data = await fetchConversationsFromServer();
     if (data.items.length) {
       state.conversations = data.items;
-      state.activeId = data.activeId || data.items[0].id;
-      sortConversations();
+      openFreshConversation();
       renderAll();
       updateConversationList();
       updateScrollButton();
@@ -479,8 +489,7 @@ async function initConversations() {
   const cached = loadConversationsFromLocal();
   if (cached.items.length) {
     state.conversations = cached.items;
-    state.activeId = cached.activeId || cached.items[0].id;
-    sortConversations();
+    openFreshConversation();
     renderAll();
     updateConversationList();
     updateScrollButton();
@@ -1702,7 +1711,7 @@ if (IS_MOBILE) {
 async function bootstrap() {
   applyVariantBranding();
   logClientEvent("client:open", getBridgeDiagnostics());
-  await initPlatformUser();
+  const hasPlatformUser = await initPlatformUser();
   const hasAuthCode = await captureAuthCodeFromUrl(getAuthCtx());
   await loadQuestionBank();
   setConnHint();
@@ -1712,7 +1721,7 @@ async function bootstrap() {
   updateConversationList();
   updateUserInfoDisplay();
   updateAuthDisplay(getAuthCtx());
-  if (!hasAuthCode) {
+  if (!hasPlatformUser && !hasAuthCode) {
     const result = await tryLoginWithStoredToken(getAuthCtx());
     if (result.needsAuth) {
       setTips("认证失效，正在重新认证...");
