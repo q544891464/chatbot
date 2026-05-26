@@ -213,7 +213,7 @@ export async function startAuthFlow(ctx) {
       setTips?.(
         "认证配置不完整，请检查 AUTH_SERVER_DOMAIN、AUTH_CLIENT_ID、AUTH_CLIENT_SECRET、AUTH_REDIRECT_URI",
       );
-      return;
+      return false;
     }
     const stateValue = `state-${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
     state.auth = {
@@ -234,8 +234,10 @@ export async function startAuthFlow(ctx) {
     url.searchParams.set("scope", scope);
     url.searchParams.set("state", stateValue);
     window.location.href = url.toString();
+    return true;
   } catch (err) {
     setTips?.(`认证失败：${formatRuntimeError(err, "认证失败")}`);
+    return false;
   }
 }
 

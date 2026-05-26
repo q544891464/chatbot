@@ -50,6 +50,12 @@ body{
   font-family: "Avenir Next", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   position: relative;
 }
+body.auth-pending .app,
+body.auth-pending .modal,
+body.auth-pending .lightbox{
+  visibility:hidden;
+  pointer-events:none;
+}
 body::before,
 body::after{
   content:"";

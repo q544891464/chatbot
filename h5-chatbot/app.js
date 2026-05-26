@@ -243,6 +243,10 @@ function setAccessDenied(denied) {
   setAccessDeniedState(el, state, denied);
 }
 
+function setAuthPending(pending) {
+  document.body.classList.toggle("auth-pending", Boolean(pending));
+}
+
 function applyVariantBranding() {
   const title = String(state.variant.title || "政企AI助手");
   document.title = title;
@@ -1710,35 +1714,45 @@ if (IS_MOBILE) {
  * @returns {Promise<void>}
  */
 async function bootstrap() {
+  setAuthPending(true);
   applyVariantBranding();
   logClientEvent("client:open", getBridgeDiagnostics());
   const hasPlatformUser = await initPlatformUser();
   const hasAuthCode = await captureAuthCodeFromUrl(getAuthCtx());
   await loadQuestionBank();
   setConnHint();
-  renderAll();
-  updateTextareaHeight();
-  updateScrollButton();
-  updateConversationList();
-  updateUserInfoDisplay();
-  updateAuthDisplay(getAuthCtx());
   if (!hasPlatformUser && !hasAuthCode) {
     const result = await tryLoginWithStoredToken(getAuthCtx());
     if (result.needsAuth || result.reason === "missing_token") {
       setTips(result.needsAuth ? "认证失效，正在重新认证..." : "正在跳转登录认证...");
-      startAuthFlow(getAuthCtx());
+      const started = await startAuthFlow(getAuthCtx());
+      if (!started) {
+        setAccessDenied(true);
+        setAuthPending(false);
+        renderAll();
+        updateUserInfoDisplay();
+        updateAuthDisplay(getAuthCtx());
+      }
       return;
     }
   }
   if (!hasAuthenticatedUserInfo()) {
     setAccessDenied(true);
     setTips("未获取到登录用户信息，请从已登录的工作平台入口进入。");
+    setAuthPending(false);
     renderAll();
     updateUserInfoDisplay();
     updateAuthDisplay(getAuthCtx());
     return;
   }
   setAccessDenied(false);
+  setAuthPending(false);
+  renderAll();
+  updateTextareaHeight();
+  updateScrollButton();
+  updateConversationList();
+  updateUserInfoDisplay();
+  updateAuthDisplay(getAuthCtx());
   await initConversations();
   if (!isConfigured(state.config)) {
     setTips("服务配置不可用，请联系管理员检查后端配置。");
