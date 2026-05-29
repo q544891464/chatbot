@@ -247,6 +247,24 @@ function setAuthPending(pending) {
   document.body.classList.toggle("auth-pending", Boolean(pending));
 }
 
+function applyTopbarVisibility(hidden) {
+  document.body.classList.toggle("topbar-hidden", Boolean(hidden));
+}
+
+async function loadAppConfig() {
+  try {
+    const res = await fetch(`${getStoreBase()}/app-config`, {
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+    });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    applyTopbarVisibility(data?.hideTopbar !== false);
+  } catch {
+    applyTopbarVisibility(true);
+  }
+}
+
 function applyVariantBranding() {
   const title = String(state.variant.title || "政企AI助手");
   document.title = title;
@@ -1715,6 +1733,7 @@ if (IS_MOBILE) {
  */
 async function bootstrap() {
   setAuthPending(true);
+  await loadAppConfig();
   applyVariantBranding();
   logClientEvent("client:open", getBridgeDiagnostics());
   const hasPlatformUser = await initPlatformUser();

@@ -1,5 +1,6 @@
 function createApiRouter(deps) {
   const {
+    appConfig,
     authConfig,
     corsHeaders,
     formatInternalError,
@@ -35,6 +36,11 @@ function createApiRouter(deps) {
 
       if (req.method === "GET" && url.pathname === "/api/health") {
         sendJson(res, 200, health());
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/api/app-config") {
+        sendJson(res, 200, appConfig());
         return;
       }
 

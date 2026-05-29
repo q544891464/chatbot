@@ -233,6 +233,7 @@ OAuth 流程如下：
 | 方法 | 路径 | 处理函数 | 用途 |
 | --- | --- | --- | --- |
 | `GET` | `/api/health` | 内联处理 | 健康检查，确认 Node 服务可访问 |
+| `GET` | `/api/app-config` | 内联处理 | 返回前端 UI 配置，例如是否隐藏标题栏 |
 | `GET` | `/api/auth-config` | 内联处理 | 返回前端发起 OAuth 所需的授权地址、client_id、redirect_uri、scope；支持 `appVariant` |
 | `POST` | `/api/auth-token` | `handleAuthToken` | 用授权码换 access token / refresh token；请求体可带 `appVariant` |
 | `GET` | `/api/auth-userinfo` | `handleAuthUserInfo` | 使用 access token 请求 OAuth userinfo |
@@ -339,6 +340,7 @@ cp server/.env.example server/.env
 | --- | --- | --- | --- |
 | `PORT` | 否 | `8787` | Node 代理监听端口 |
 | `CORS_ORIGIN` | 否 | `*` | CORS 允许来源，生产环境建议改为具体域名 |
+| `HIDE_TOPBAR` | 否 | `true` | 是否隐藏 H5 顶部标题栏；设为 `false` 可显示标题栏 |
 
 ### ChatbotAgent 配置
 
@@ -812,6 +814,7 @@ HEALTHCHECK_URL="http://127.0.0.1:8787/api/health"
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/health` | 健康检查 |
+| `GET` | `/api/app-config` | 获取前端 UI 配置 |
 | `GET` | `/api/auth-config` | 获取 OAuth 配置 |
 | `POST` | `/api/auth-token` | 授权码换 token |
 | `GET` | `/api/auth-userinfo` | 获取用户信息 |

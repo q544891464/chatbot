@@ -53,6 +53,7 @@ const AUTH_GONGYE_CLIENT_ID = String(process.env.AUTH_GONGYE_CLIENT_ID || "");
 const AUTH_GONGYE_CLIENT_SECRET = String(process.env.AUTH_GONGYE_CLIENT_SECRET || "");
 const AUTH_GONGYE_REDIRECT_URI = String(process.env.AUTH_GONGYE_REDIRECT_URI || "");
 const URL_ENTRY_VERIFY_URL = String(process.env.URL_ENTRY_VERIFY_URL || process.env.AUTH_URL_ENTRY_VERIFY_URL || "");
+const HIDE_TOPBAR = parseEnvBoolean(process.env.HIDE_TOPBAR, true);
 
 const DEFAULT_FETCH_TIMEOUT_MS = parseDurationMs(process.env.FETCH_TIMEOUT_MS, 15_000);
 const ALT_AUTH_TIMEOUT_MS = parseDurationMs(process.env.ALT_AUTH_TIMEOUT_MS, 8_000);
@@ -67,6 +68,14 @@ const ALT_AUTH_FAILURE_COOLDOWN_MS = parseDurationMs(
   process.env.ALT_AUTH_FAILURE_COOLDOWN_MS,
   15_000,
 );
+
+function parseEnvBoolean(value, fallback = false) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return Boolean(fallback);
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return Boolean(fallback);
+}
 
 const pool = mysql.createPool({
   host: DB_HOST,
@@ -2381,6 +2390,9 @@ async function handleStatic(req, res) {
 }
 
 const server = http.createServer(createApiRouter({
+  appConfig: () => ({
+    hideTopbar: HIDE_TOPBAR,
+  }),
   authConfig: (appVariant) => {
     const oauthConfig = pickOAuthConfig(appVariant);
     return {
