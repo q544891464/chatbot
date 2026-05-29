@@ -1532,10 +1532,10 @@ body.access-denied .messages{
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
+  overflow: auto;
 }
 .empty--locked .empty__card{
-  width: min(420px, 100%);
+  width: min(520px, 100%);
   border-color: #f1c9c9;
   background: #fffafa;
   text-align: center;
@@ -1548,6 +1548,28 @@ body.access-denied .messages{
   font-size: 30px;
   font-weight: 900;
   box-shadow: none;
+}
+.empty__diagnostics{
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid #f1c9c9;
+  border-radius: 14px;
+  background: #fff5f5;
+  text-align: left;
+}
+.empty__diagnostics-title{
+  color: #912018;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.4;
+}
+.empty__diagnostics-list{
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.65;
+  word-break: break-word;
 }
 body.access-denied .composer__box{
   border-color: #ead4d4;

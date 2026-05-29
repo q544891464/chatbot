@@ -247,6 +247,51 @@ function setAuthPending(pending) {
   document.body.classList.toggle("auth-pending", Boolean(pending));
 }
 
+function clearAccessDeniedLogs() {
+  state.accessDeniedLogs = [];
+}
+
+function formatDiagnosticValue(value) {
+  if (value == null) return "";
+  if (Array.isArray(value)) return value.length ? value.join(", ") : "无";
+  if (typeof value === "boolean") return value ? "是" : "否";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function addAccessDeniedLog(label, value) {
+  const text = String(label || "").trim();
+  if (!text) return;
+  const detail = formatDiagnosticValue(value).trim();
+  const line = detail ? `${text}：${detail}` : text;
+  state.accessDeniedLogs = [...state.accessDeniedLogs, line].slice(-12);
+}
+
+function addBridgeDiagnosticLogs(diagnostics) {
+  const bridge = diagnostics?.bridge || {};
+  addAccessDeniedLog(
+    "运行环境",
+    `iOS=${formatDiagnosticValue(diagnostics?.isIos)}，Android=${formatDiagnosticValue(
+      diagnostics?.isAndroid,
+    )}，App=${formatDiagnosticValue(diagnostics?.isApp)}`,
+  );
+  addAccessDeniedLog("URL参数", diagnostics?.location?.searchKeys || []);
+  addAccessDeniedLog("Android桥方法", bridge.androidMethodKeys || []);
+  addAccessDeniedLog(
+    "iOS桥",
+    `webkit=${formatDiagnosticValue(bridge.hasWebkitMessageHandlers)}，iOSMethodBridge=${formatDiagnosticValue(
+      bridge.hasIOSMethodBridge,
+    )}`,
+  );
+  addAccessDeniedLog("iOS webkit方法", bridge.webkitHandlerKeys || []);
+}
+
 function applyTopbarVisibility(hidden) {
   document.body.classList.toggle("topbar-hidden", Boolean(hidden));
 }
@@ -432,6 +477,8 @@ const state = {
   inFlight: null,
   platformUser: null,
   accessDenied: false,
+  accessDeniedLogs: [],
+  lastTips: "",
   auth: loadAuthState(),
   questionBank: DEFAULT_QUESTION_BANK.slice(),
   promptSelection: { pending: false, value: "" },
@@ -482,7 +529,8 @@ async function initPlatformUser() {
     }
     updateUserInfoDisplay();
     return true;
-  } catch {
+  } catch (err) {
+    addAccessDeniedLog("宿主/入口用户信息异常", formatRuntimeError(err, "读取用户信息失败"));
     return false;
   }
 }
@@ -563,7 +611,8 @@ function isConfigured(cfg) {
  * @param {string} text 待展示的提示文本。
  */
 function setTips(text) {
-  el.tips.textContent = text || "";
+  state.lastTips = text || "";
+  el.tips.textContent = state.lastTips;
 }
 /**
  * 返回平台展示名称。
@@ -770,6 +819,27 @@ function createAccessDeniedNode() {
   card.appendChild(icon);
   card.appendChild(title);
   card.appendChild(sub);
+  const logs = [
+    ...(state.lastTips ? [`页面提示：${state.lastTips}`] : []),
+    ...(Array.isArray(state.accessDeniedLogs) ? state.accessDeniedLogs : []),
+  ];
+  if (logs.length) {
+    const diag = document.createElement("div");
+    diag.className = "empty__diagnostics";
+    const diagTitle = document.createElement("div");
+    diagTitle.className = "empty__diagnostics-title";
+    diagTitle.textContent = "认证诊断";
+    const list = document.createElement("ul");
+    list.className = "empty__diagnostics-list";
+    logs.forEach((line) => {
+      const item = document.createElement("li");
+      item.textContent = line;
+      list.appendChild(item);
+    });
+    diag.appendChild(diagTitle);
+    diag.appendChild(list);
+    card.appendChild(diag);
+  }
   wrap.appendChild(card);
   return { wrap };
 }
@@ -1733,18 +1803,31 @@ if (IS_MOBILE) {
  */
 async function bootstrap() {
   setAuthPending(true);
+  clearAccessDeniedLogs();
   await loadAppConfig();
   applyVariantBranding();
-  logClientEvent("client:open", getBridgeDiagnostics());
+  const bridgeDiagnostics = getBridgeDiagnostics();
+  logClientEvent("client:open", bridgeDiagnostics);
+  addBridgeDiagnosticLogs(bridgeDiagnostics);
   const hasPlatformUser = await initPlatformUser();
+  addAccessDeniedLog("宿主用户信息", hasPlatformUser ? "已获取" : "未获取");
   const hasAuthCode = await captureAuthCodeFromUrl(getAuthCtx());
+  addAccessDeniedLog("OAuth回调code", hasAuthCode ? "存在" : "无");
   await loadQuestionBank();
   setConnHint();
   if (!hasPlatformUser && !hasAuthCode) {
     const result = await tryLoginWithStoredToken(getAuthCtx());
-    if (result.needsAuth || result.reason === "missing_token") {
+    addAccessDeniedLog(
+      "本地Token登录",
+      `ok=${formatDiagnosticValue(result.ok)}，needsAuth=${formatDiagnosticValue(
+        result.needsAuth,
+      )}，reason=${result.reason || "无"}`,
+    );
+    if (!result.ok && !hasAuthenticatedUserInfo()) {
       setTips(result.needsAuth ? "认证失效，正在重新认证..." : "正在跳转登录认证...");
+      addAccessDeniedLog("OAuth跳转", "准备发起");
       const started = await startAuthFlow(getAuthCtx());
+      addAccessDeniedLog("OAuth跳转结果", started ? "已发起" : "未发起，请检查认证配置或网络");
       if (!started) {
         setAccessDenied(true);
         setAuthPending(false);
@@ -1758,6 +1841,7 @@ async function bootstrap() {
   if (!hasAuthenticatedUserInfo()) {
     setAccessDenied(true);
     setTips("未获取到登录用户信息，请从已登录的工作平台入口进入。");
+    addAccessDeniedLog("最终结果", "未获取到可信用户信息");
     setAuthPending(false);
     renderAll();
     updateUserInfoDisplay();
@@ -1765,6 +1849,7 @@ async function bootstrap() {
     return;
   }
   setAccessDenied(false);
+  clearAccessDeniedLogs();
   setAuthPending(false);
   renderAll();
   updateTextareaHeight();

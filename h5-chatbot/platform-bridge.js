@@ -54,7 +54,7 @@ function normalizeUserInfo(raw) {
  * @param {object} data 调用参数。
  * @returns {Promise<*>} 宿主回调结果。
  */
-function callApp(event, data = {}) {
+function callApp(event, data = {}, timeoutMs = 1200) {
   return new Promise((resolve, reject) => {
     if (!isApp) {
       resolve(null);
@@ -65,20 +65,33 @@ function callApp(event, data = {}) {
     const successName = `__bridge_${key}_s`;
     const failName = `__bridge_${key}_f`;
 
+    let settled = false;
+    let timer = null;
+
+    const finish = (fn, payload) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn(payload);
+    };
+
     const cleanup = () => {
+      if (timer) window.clearTimeout(timer);
       delete window[successName];
       delete window[failName];
     };
 
     window[successName] = (payload) => {
-      cleanup();
-      resolve(unwrapPayload(payload));
+      finish(resolve, unwrapPayload(payload));
     };
 
     window[failName] = (err) => {
-      cleanup();
-      reject(err);
+      finish(reject, err);
     };
+
+    timer = window.setTimeout(() => {
+      finish(resolve, null);
+    }, Math.max(300, Number(timeoutMs) || 1200));
 
     if (isAndroid) {
       if (window.androidMethod && typeof window.androidMethod[event] === "function") {
@@ -91,6 +104,11 @@ function callApp(event, data = {}) {
         window.androidMethod.sendCommand(payload);
         return;
       }
+    }
+
+    if (isIos && window.webkit?.messageHandlers?.[event]?.postMessage) {
+      window.webkit.messageHandlers[event].postMessage({ action: event, data, successName, failName });
+      return;
     }
 
     if (isIos && window.iOSMethodBridge && typeof window.iOSMethodBridge.postMessage === "function") {
@@ -122,11 +140,15 @@ async function getLoginUserInfo() {
 
   // Fallback to generic bridge call used by iOS/other SDKs.
   if (isApp) {
-    try {
-      const data = await callApp("getLoginUserInfo", {});
-      return normalizeUserInfo(data);
-    } catch {
-      return null;
+    const methods = ["getLoginUserInfo", "jsGetUserBean", "getUserInfo", "jsGetUserInfo", "getLoginUserBean"];
+    for (const method of methods) {
+      try {
+        const data = await callApp(method, {});
+        const normalized = normalizeUserInfo(data);
+        if (normalized) return normalized;
+      } catch {
+        // try next bridge method
+      }
     }
   }
 
