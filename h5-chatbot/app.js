@@ -121,7 +121,8 @@ function loadConfig() {
   const defaultBaseUrl = getDefaultProxyBaseUrl();
   const baseUrl = normalizeBaseUrl(saved?.baseUrl || defaultBaseUrl);
   const apiKey = String(saved?.apiKey || "");
-  const userId = String(saved?.userId || randomId("user"));
+  const urlUser = getUrlUserInfo();
+  const userId = String(pickPlatformUserId(urlUser) || saved?.userId || randomId("user"));
   const responseMode = "streaming";
   const platform = "agent";
   return { baseUrl, apiKey, userId, responseMode, platform };
@@ -245,6 +246,18 @@ function setAccessDenied(denied) {
 
 function setAuthPending(pending) {
   document.body.classList.toggle("auth-pending", Boolean(pending));
+}
+
+function getUrlUserInfo() {
+  const params = new URLSearchParams(window.location.search || "");
+  const userInfo = {
+    userId: String(params.get("userId") || "").trim(),
+    phone: String(params.get("phone") || params.get("phone_number") || params.get("mobile") || "").trim(),
+    userName: String(params.get("userName") || params.get("name") || params.get("nickName") || "").trim(),
+    org: String(params.get("org") || params.get("orgName") || params.get("deptName") || "").trim(),
+    authSource: "url-userinfo",
+  };
+  return pickPlatformUserId(userInfo) ? userInfo : null;
 }
 
 function clearAccessDeniedLogs() {
@@ -518,9 +531,9 @@ const IS_MOBILE = (() => {
  */
 async function initPlatformUser() {
   try {
-    const userInfo = (await getLoginUserInfo()) || (await fetchUrlEntryUserInfo());
+    const userInfo = getUrlUserInfo() || (await getLoginUserInfo()) || (await fetchUrlEntryUserInfo());
     state.platformUser = userInfo || null;
-    logAuthUserInfo(userInfo?.authSource === "url-entry" ? "url-entry" : "platform-bridge", userInfo);
+    logAuthUserInfo(userInfo?.authSource || "platform-bridge", userInfo);
     const userId = pickPlatformUserId(userInfo);
     if (!userId) return false;
     if (userId !== state.config.userId) {
