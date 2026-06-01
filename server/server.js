@@ -52,6 +52,11 @@ const AUTH_SCOPE = String(process.env.AUTH_SCOPE || "");
 const AUTH_GONGYE_CLIENT_ID = String(process.env.AUTH_GONGYE_CLIENT_ID || "");
 const AUTH_GONGYE_CLIENT_SECRET = String(process.env.AUTH_GONGYE_CLIENT_SECRET || "");
 const AUTH_GONGYE_REDIRECT_URI = String(process.env.AUTH_GONGYE_REDIRECT_URI || "");
+const AUTH_GONGYE_SCOPE = String(process.env.AUTH_GONGYE_SCOPE || "");
+const AUTH_WIKI_CLIENT_ID = String(process.env.AUTH_WIKI_CLIENT_ID || "");
+const AUTH_WIKI_CLIENT_SECRET = String(process.env.AUTH_WIKI_CLIENT_SECRET || "");
+const AUTH_WIKI_REDIRECT_URI = String(process.env.AUTH_WIKI_REDIRECT_URI || "");
+const AUTH_WIKI_SCOPE = String(process.env.AUTH_WIKI_SCOPE || "");
 const URL_ENTRY_VERIFY_URL = String(process.env.URL_ENTRY_VERIFY_URL || process.env.AUTH_URL_ENTRY_VERIFY_URL || "");
 const HIDE_TOPBAR = parseEnvBoolean(process.env.HIDE_TOPBAR, true);
 
@@ -277,18 +282,33 @@ function getAuthUserInfoUrlBase() {
 }
 
 function normalizeAuthVariant(appVariant) {
-  return String(appVariant || "default").trim() === "gongye" ? "gongye" : "default";
+  const variant = String(appVariant || "default").trim().toLowerCase();
+  return ["gongye", "wiki"].includes(variant) ? variant : "default";
 }
 
 function pickOAuthConfig(appVariant, redirectUri = "") {
   const uri = String(redirectUri || "").trim();
-  const variant = uri.includes("/gongye") ? "gongye" : normalizeAuthVariant(appVariant);
+  const variant = uri.includes("/gongye")
+    ? "gongye"
+    : (uri.includes("/zqai-doc") || uri.includes("/wiki"))
+      ? "wiki"
+      : normalizeAuthVariant(appVariant);
   if (variant === "gongye") {
     return {
       variant,
       clientId: AUTH_GONGYE_CLIENT_ID || AUTH_CLIENT_ID,
       clientSecret: AUTH_GONGYE_CLIENT_SECRET || AUTH_CLIENT_SECRET,
       redirectUri: AUTH_GONGYE_REDIRECT_URI || AUTH_REDIRECT_URI,
+      scope: AUTH_GONGYE_SCOPE || AUTH_SCOPE,
+    };
+  }
+  if (variant === "wiki") {
+    return {
+      variant,
+      clientId: AUTH_WIKI_CLIENT_ID || AUTH_CLIENT_ID,
+      clientSecret: AUTH_WIKI_CLIENT_SECRET || AUTH_CLIENT_SECRET,
+      redirectUri: AUTH_WIKI_REDIRECT_URI || AUTH_REDIRECT_URI,
+      scope: AUTH_WIKI_SCOPE || AUTH_SCOPE,
     };
   }
   return {
@@ -296,6 +316,7 @@ function pickOAuthConfig(appVariant, redirectUri = "") {
     clientId: AUTH_CLIENT_ID,
     clientSecret: AUTH_CLIENT_SECRET,
     redirectUri: AUTH_REDIRECT_URI,
+    scope: AUTH_SCOPE,
   };
 }
 
@@ -1779,10 +1800,15 @@ async function handleAuthToken(req, res) {
     return;
   }
   const body = await readBodyJson(req);
-  const redirectUri = String(body?.redirectUri || AUTH_REDIRECT_URI || "");
-  const oauthConfig = pickOAuthConfig(body?.appVariant, redirectUri);
+  const requestedRedirectUri = String(body?.redirectUri || "");
+  const oauthConfig = pickOAuthConfig(body?.appVariant, requestedRedirectUri);
+  const redirectUri = requestedRedirectUri || oauthConfig.redirectUri || "";
   if (!oauthConfig.clientId || !oauthConfig.clientSecret) {
-    sendJson(res, 500, { error: "服务端缺少 AUTH_CLIENT_ID 或 AUTH_CLIENT_SECRET 配置", source: "server-config" });
+    sendJson(res, 500, {
+      error: `服务端缺少 ${oauthConfig.variant} OAuth client 配置`,
+      source: "server-config",
+      variant: oauthConfig.variant,
+    });
     return;
   }
 
@@ -2399,7 +2425,8 @@ const server = http.createServer(createApiRouter({
       authorizeUrlBase: getAuthAuthorizeUrlBase(),
       clientId: oauthConfig.clientId,
       redirectUri: oauthConfig.redirectUri,
-      scope: AUTH_SCOPE,
+      scope: oauthConfig.scope,
+      variant: oauthConfig.variant,
     };
   },
   corsHeaders,

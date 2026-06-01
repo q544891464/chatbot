@@ -62,12 +62,13 @@
 | --- | --- | --- | --- | --- |
 | `/` | 政企AI助手 | `question-bank.json` | 使用 ai-wiki 默认配置 | 使用 `AUTH_CLIENT_ID`、`AUTH_CLIENT_SECRET`、`AUTH_REDIRECT_URI` |
 | `/gongye` | 智改数转诊断助手 | `question-bank-gongye.json` | 聊天请求追加 `config.agent_config_id = 6` | 使用 `AUTH_GONGYE_CLIENT_ID`、`AUTH_GONGYE_CLIENT_SECRET`、`AUTH_GONGYE_REDIRECT_URI` |
+| wiki-h5 | 文档知识库 | 独立前端 | 由 wiki-h5 调用本服务 OAuth 接口 | 使用 `AUTH_WIKI_CLIENT_ID`、`AUTH_WIKI_CLIENT_SECRET`、`AUTH_WIKI_REDIRECT_URI` |
 
 版本配置集中在 `h5-chatbot/variants.js`。新增入口时，优先在这里增加配置，再在后端 `APP_ROUTE_PREFIXES` 中加入路径前缀。静态资源仍复用同一个 `index.html`，后端会把 `/gongye/app.js`、`/gongye/styles.css` 等路径映射回 `h5-chatbot/` 下的真实文件。
 
 会话按入口隔离。前端同步会话时会带上 `appVariant`，后端通过 `conversations.app_variant` 和 `user_variant_states` 区分同一用户在不同入口下的历史会话与当前活跃会话。
 
-OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带上当前入口的 `appVariant`，后端默认入口返回默认应用配置，`/gongye` 返回工业应用配置；两者可以共用同一个认证网关。
+OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带上当前入口的 `appVariant`，后端默认入口返回默认应用配置，`/gongye` 返回工业应用配置，wiki-h5 传 `wiki` 时返回 wiki 应用配置；多个应用可以共用同一个认证网关。
 
 ## 目录结构
 
@@ -182,7 +183,7 @@ OAuth 流程如下：
 5. 前端拿到 access token 后调用 `/api/auth-userinfo` 获取用户信息。
 6. `applyUserInfoFromResponse` 将 `name`、`phone_number`、`orgName` 映射到页面状态。
 
-默认入口和 `/gongye` 可以配置不同 OAuth 应用。前端会按当前入口传递 `appVariant`，后端在 `/api/auth-config` 和 `/api/auth-token` 中使用同一套入口判断，避免 `/gongye` 授权码被默认应用的 `client_secret` 兑换。
+默认入口、`/gongye` 和 wiki-h5 可以配置不同 OAuth 应用。前端会按当前入口传递 `appVariant`，后端在 `/api/auth-config` 和 `/api/auth-token` 中使用同一套入口判断，避免不同应用的授权码被错误的 `client_secret` 兑换。
 
 为了方便排查登录问题，当前还会把前端实际拿到的用户信息上报到 `/api/auth-userinfo-log`，后端写入 `server-YYYY-MM-DD.log`，事件名为 `auth:userinfo:client`。这类日志包含用户敏感信息，只建议在调试阶段开启或严格限制服务器日志访问权限。
 
@@ -371,6 +372,11 @@ cp server/.env.example server/.env
 | `AUTH_GONGYE_CLIENT_ID` | 否 | 回退到 `AUTH_CLIENT_ID` | `/gongye` 入口的 OAuth client_id |
 | `AUTH_GONGYE_CLIENT_SECRET` | 否 | 回退到 `AUTH_CLIENT_SECRET` | `/gongye` 入口的 OAuth client_secret |
 | `AUTH_GONGYE_REDIRECT_URI` | 否 | 回退到 `AUTH_REDIRECT_URI` | `/gongye` 入口的 OAuth 回调地址 |
+| `AUTH_GONGYE_SCOPE` | 否 | 回退到 `AUTH_SCOPE` | `/gongye` 入口的 OAuth scope |
+| `AUTH_WIKI_CLIENT_ID` | 否 | 回退到 `AUTH_CLIENT_ID` | wiki-h5 的 OAuth client_id |
+| `AUTH_WIKI_CLIENT_SECRET` | 否 | 回退到 `AUTH_CLIENT_SECRET` | wiki-h5 的 OAuth client_secret |
+| `AUTH_WIKI_REDIRECT_URI` | 否 | 回退到 `AUTH_REDIRECT_URI` | wiki-h5 的 OAuth 回调地址，例如 `/zqai-doc/` |
+| `AUTH_WIKI_SCOPE` | 否 | 回退到 `AUTH_SCOPE` | wiki-h5 的 OAuth scope |
 | `AUTH_SCOPE` | 否 | 空 | OAuth scope |
 
 配置示例：
@@ -388,6 +394,10 @@ AUTH_REDIRECT_URI=http://182.92.153.82:8787/
 AUTH_GONGYE_CLIENT_ID=<工业入口应用 appid>
 AUTH_GONGYE_CLIENT_SECRET=<工业入口应用 appsecret>
 AUTH_GONGYE_REDIRECT_URI=http://182.92.153.82:8787/gongye
+
+AUTH_WIKI_CLIENT_ID=<wiki入口应用 appid>
+AUTH_WIKI_CLIENT_SECRET=<wiki入口应用 appsecret>
+AUTH_WIKI_REDIRECT_URI=http://182.92.153.82:8787/zqai-doc/
 
 AUTH_SCOPE=openid profile phone email address
 ```
@@ -896,6 +906,7 @@ curl http://127.0.0.1:8787/api/health
 - `AUTH_CLIENT_SECRET`
 - `AUTH_REDIRECT_URI`
 - `/gongye` 入口还需要检查 `AUTH_GONGYE_CLIENT_ID`、`AUTH_GONGYE_CLIENT_SECRET`、`AUTH_GONGYE_REDIRECT_URI`
+- wiki-h5 入口还需要检查 `AUTH_WIKI_CLIENT_ID`、`AUTH_WIKI_CLIENT_SECRET`、`AUTH_WIKI_REDIRECT_URI`
 - 认证平台后台登记的 `redirect_uri` 必须和当前入口完全一致，例如默认入口是 `/`，工业入口是 `/gongye`
 
 ### 5. 看不到历史会话
