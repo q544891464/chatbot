@@ -7,6 +7,7 @@ import {
   formatConversationTime,
   getDefaultProxyBaseUrl,
   formatRuntimeError,
+  isLoopbackProxyBaseUrl,
   isProxyBaseUrl,
   normalizeBaseUrl,
   nowTime,
@@ -119,7 +120,10 @@ function loadConfig() {
     null,
   );
   const defaultBaseUrl = getDefaultProxyBaseUrl();
-  const baseUrl = normalizeBaseUrl(saved?.baseUrl || defaultBaseUrl);
+  const savedBaseUrl = normalizeBaseUrl(saved?.baseUrl || "");
+  const baseUrl = isLoopbackProxyBaseUrl(savedBaseUrl) && defaultBaseUrl === "/api"
+    ? defaultBaseUrl
+    : normalizeBaseUrl(savedBaseUrl || defaultBaseUrl);
   const apiKey = String(saved?.apiKey || "");
   const urlUser = getUrlUserInfo();
   const userId = String(pickPlatformUserId(urlUser) || saved?.userId || randomId("user"));
@@ -174,6 +178,9 @@ function loadConversationsFromLocal() {
  */
 function getStoreBase() {
   const b = normalizeBaseUrl(state.config.baseUrl);
+  if (isLoopbackProxyBaseUrl(b) && getDefaultProxyBaseUrl() === "/api") {
+    return "/api";
+  }
   if (b === "/api") {
     return getDefaultProxyBaseUrl();
   }

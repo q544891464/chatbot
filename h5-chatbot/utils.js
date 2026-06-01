@@ -98,6 +98,26 @@ export function isProxyBaseUrl(baseUrl) {
 }
 
 /**
+ * 判断代理地址是否写死到了浏览器所在机器的回环地址。
+ *
+ * @param {string} baseUrl 待判断的 Base URL。
+ * @returns {boolean} 是否为回环地址代理。
+ */
+export function isLoopbackProxyBaseUrl(baseUrl) {
+  const b = normalizeBaseUrl(baseUrl);
+  if (!b) return false;
+  try {
+    const url = new URL(b, "http://localhost");
+    return (
+      isProxyBaseUrl(url.pathname)
+      && /^(127(?:\.\d{1,3}){3}|localhost|\[::1\])$/i.test(url.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 根据当前页面来源推断默认代理地址。
  *
  * @returns {string} 适合当前运行环境的默认代理地址。
@@ -110,10 +130,7 @@ export function getDefaultProxyBaseUrl() {
   if (protocol === "file:") {
     return "http://127.0.0.1:8787/api";
   }
-  if (port === "8787") {
-    return "/api";
-  }
-  return "http://127.0.0.1:8787/api";
+  return "/api";
 }
 
 /**
