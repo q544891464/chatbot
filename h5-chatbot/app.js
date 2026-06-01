@@ -324,9 +324,9 @@ async function loadAppConfig() {
     });
     if (!res.ok) return;
     const data = await res.json().catch(() => ({}));
-    applyTopbarVisibility(data?.hideTopbar !== false);
+    applyTopbarVisibility(data?.hideTopbar === true);
   } catch {
-    applyTopbarVisibility(true);
+    applyTopbarVisibility(false);
   }
 }
 

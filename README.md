@@ -341,7 +341,7 @@ cp server/.env.example server/.env
 | --- | --- | --- | --- |
 | `PORT` | 否 | `8787` | Node 代理监听端口 |
 | `CORS_ORIGIN` | 否 | `*` | CORS 允许来源，生产环境建议改为具体域名 |
-| `HIDE_TOPBAR` | 否 | `true` | 是否隐藏 H5 顶部标题栏；设为 `false` 可显示标题栏 |
+| `HIDE_TOPBAR` | 否 | `false` | 是否隐藏 H5 顶部标题栏；仅设为 `true` 时隐藏 |
 
 ### ChatbotAgent 配置
 

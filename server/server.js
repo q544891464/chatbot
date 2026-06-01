@@ -58,7 +58,7 @@ const AUTH_WIKI_CLIENT_SECRET = String(process.env.AUTH_WIKI_CLIENT_SECRET || ""
 const AUTH_WIKI_REDIRECT_URI = String(process.env.AUTH_WIKI_REDIRECT_URI || "");
 const AUTH_WIKI_SCOPE = String(process.env.AUTH_WIKI_SCOPE || "");
 const URL_ENTRY_VERIFY_URL = String(process.env.URL_ENTRY_VERIFY_URL || process.env.AUTH_URL_ENTRY_VERIFY_URL || "");
-const HIDE_TOPBAR = parseEnvBoolean(process.env.HIDE_TOPBAR, true);
+const HIDE_TOPBAR = parseEnvBoolean(process.env.HIDE_TOPBAR, false);
 
 const DEFAULT_FETCH_TIMEOUT_MS = parseDurationMs(process.env.FETCH_TIMEOUT_MS, 15_000);
 const ALT_AUTH_TIMEOUT_MS = parseDurationMs(process.env.ALT_AUTH_TIMEOUT_MS, 8_000);
