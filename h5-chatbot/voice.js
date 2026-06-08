@@ -161,6 +161,11 @@ export function createVoiceInput(options) {
   async function start() {
     if (state.accessDenied || state.inFlight || voiceState.transcribing) return;
     if (!navigator.mediaDevices?.getUserMedia) {
+      if (el.voiceFileInput) {
+        setTips(window.isSecureContext ? "当前浏览器不支持实时录音，请选择或录制音频文件。" : "当前 HTTPS 证书未被浏览器信任，请选择或录制音频文件。");
+        el.voiceFileInput.click();
+        return;
+      }
       setTips(window.isSecureContext ? "当前浏览器不支持录音。" : "当前 HTTPS 证书未被浏览器信任，无法调用麦克风。");
       return;
     }

@@ -2351,6 +2351,14 @@ async function handleAudioToText(req, res) {
 
   const raw = await upstreamRes.text().catch(() => "");
   if (!upstreamRes.ok) {
+    if (/Speech to text is not enabled/i.test(raw)) {
+      sendJson(res, upstreamRes.status, {
+        error: "语音转文字上游应用未启用 Speech to text，请在上游应用配置中开启语音转文字能力，或更换已启用该能力的 API Token。",
+        source: "语音转文字上游",
+        status: upstreamRes.status,
+      });
+      return;
+    }
     sendJson(res, upstreamRes.status, formatUpstreamError("语音转文字上游", upstreamRes.status, raw));
     return;
   }

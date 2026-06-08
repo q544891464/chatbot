@@ -61,6 +61,16 @@ const DEFAULT_USER_META = {
   org: "org1",
   phone: "1234567890",
 };
+
+function shouldPreferRuntimeBaseUrl(savedBaseUrl, defaultBaseUrl) {
+  const saved = normalizeBaseUrl(savedBaseUrl);
+  const current = normalizeBaseUrl(defaultBaseUrl);
+  if (!saved) return false;
+  if (isLoopbackProxyBaseUrl(saved)) return true;
+  if (current && current !== "/api" && saved !== current) return true;
+  return false;
+}
+
 const el = {
   connHint: document.getElementById("connHint"),
   topbarName: document.querySelector(".topbar__name"),
@@ -121,7 +131,7 @@ function loadConfig() {
   );
   const defaultBaseUrl = getDefaultProxyBaseUrl();
   const savedBaseUrl = normalizeBaseUrl(saved?.baseUrl || "");
-  const baseUrl = isLoopbackProxyBaseUrl(savedBaseUrl) && defaultBaseUrl === "/api"
+  const baseUrl = shouldPreferRuntimeBaseUrl(savedBaseUrl, defaultBaseUrl)
     ? defaultBaseUrl
     : normalizeBaseUrl(savedBaseUrl || defaultBaseUrl);
   const apiKey = String(saved?.apiKey || "");
@@ -178,14 +188,15 @@ function loadConversationsFromLocal() {
  */
 function getStoreBase() {
   const b = normalizeBaseUrl(state.config.baseUrl);
-  if (isLoopbackProxyBaseUrl(b) && getDefaultProxyBaseUrl() === "/api") {
-    return "/api";
+  const defaultBaseUrl = getDefaultProxyBaseUrl();
+  if (shouldPreferRuntimeBaseUrl(b, defaultBaseUrl)) {
+    return defaultBaseUrl;
   }
   if (b === "/api") {
-    return getDefaultProxyBaseUrl();
+    return defaultBaseUrl;
   }
   if (isProxyBaseUrl(b)) return b;
-  return getDefaultProxyBaseUrl();
+  return defaultBaseUrl;
 }
 
 function logAuthUserInfo(source, userInfo) {

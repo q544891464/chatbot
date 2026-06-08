@@ -126,9 +126,17 @@ export function getDefaultProxyBaseUrl() {
   if (typeof window === "undefined" || !window.location) {
     return "/api";
   }
-  const { protocol, port } = window.location;
+  const { protocol, pathname } = window.location;
   if (protocol === "file:") {
     return "http://127.0.0.1:8787/api";
+  }
+  // If the page is served under a path prefix (e.g., /chatbot/),
+  // use that prefix for API calls so nginx can route correctly.
+  // Standard entry points (/gongye, /zqai-doc) keep the root-level /api.
+  const segments = pathname.split("/").filter(Boolean);
+  const first = segments[0] || "";
+  if (first && first !== "gongye" && first !== "zqai-doc") {
+    return `/${first}/api`;
   }
   return "/api";
 }
