@@ -45,7 +45,7 @@ function createApiRouter(deps) {
       }
 
       if (req.method === "GET" && url.pathname === "/api/auth-config") {
-        sendJson(res, 200, authConfig(url.searchParams.get("appVariant")));
+        sendJson(res, 200, authConfig(url.searchParams.get("appVariant"), url.searchParams.get("redirectUri")));
         return;
       }
 

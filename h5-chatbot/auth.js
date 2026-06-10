@@ -87,8 +87,9 @@ async function fetchAuthConfig(getStoreBase) {
   const params = new URLSearchParams();
   const variant = String(window.__CHATBOT_APP_VARIANT__ || "").trim();
   if (variant) params.set("appVariant", variant);
-  const suffix = params.toString() ? `?${params.toString()}` : "";
-  const url = `${getStoreBase()}/auth-config${suffix}`;
+  // 传递当前页面 URL 作为 OAuth 回调地址，适配多路径部署（如 /wiki/chatbot/）
+  params.set("redirectUri", window.location.origin + window.location.pathname.replace(/\/$/, "") + "/");
+  const url = `${getStoreBase()}/auth-config?${params.toString()}`;
   let res;
   try {
     res = await fetch(url, { headers: { "Content-Type": "application/json" } });

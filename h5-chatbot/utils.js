@@ -135,6 +135,10 @@ export function getDefaultProxyBaseUrl() {
   // Standard entry points (/gongye, /zqai-doc) keep the root-level /api.
   const segments = pathname.split("/").filter(Boolean);
   const first = segments[0] || "";
+  const second = segments[1] || "";
+  if (first === "wiki" && second === "chatbot") {
+    return "/wiki/chatbot/api";
+  }
   if (first && first !== "gongye" && first !== "zqai-doc") {
     return `/${first}/api`;
   }

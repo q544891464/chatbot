@@ -290,7 +290,7 @@ function pickOAuthConfig(appVariant, redirectUri = "") {
   const uri = String(redirectUri || "").trim();
   const variant = uri.includes("/gongye")
     ? "gongye"
-    : (uri.includes("/zqai-doc") || uri.includes("/wiki"))
+    : ((uri.includes("/zqai-doc") || uri.includes("/wiki")) && !uri.includes("/wiki/chatbot"))
       ? "wiki"
       : normalizeAuthVariant(appVariant);
   if (variant === "gongye") {
@@ -315,7 +315,7 @@ function pickOAuthConfig(appVariant, redirectUri = "") {
     variant,
     clientId: AUTH_CLIENT_ID,
     clientSecret: AUTH_CLIENT_SECRET,
-    redirectUri: AUTH_REDIRECT_URI,
+    redirectUri: uri || AUTH_REDIRECT_URI,
     scope: AUTH_SCOPE,
   };
 }
@@ -2394,7 +2394,9 @@ async function handleStatic(req, res) {
   if (pathname === "/") pathname = "/index.html";
 
   const parts = pathname.split("/").filter(Boolean);
-  if (APP_ROUTE_PREFIXES.has(parts[0])) {
+  if (parts[0] === "wiki" && parts[1] === "chatbot") {
+    pathname = parts.length === 2 ? "/index.html" : `/${parts.slice(2).join("/")}`;
+  } else if (APP_ROUTE_PREFIXES.has(parts[0])) {
     pathname = parts.length === 1 ? "/index.html" : `/${parts.slice(1).join("/")}`;
   }
 
@@ -2427,8 +2429,8 @@ const server = http.createServer(createApiRouter({
   appConfig: () => ({
     hideTopbar: HIDE_TOPBAR,
   }),
-  authConfig: (appVariant) => {
-    const oauthConfig = pickOAuthConfig(appVariant);
+  authConfig: (appVariant, redirectUri) => {
+    const oauthConfig = pickOAuthConfig(appVariant, redirectUri || "");
     return {
       authorizeUrlBase: getAuthAuthorizeUrlBase(),
       clientId: oauthConfig.clientId,
