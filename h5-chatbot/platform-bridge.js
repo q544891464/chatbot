@@ -1,7 +1,9 @@
 const ua = navigator.userAgent || "";
 const isAndroid = /Android|Adr/i.test(ua);
+const isHarmony = /OpenHarmony|HarmonyOS/i.test(ua);
+const isAndroidLike = isAndroid || isHarmony;
 const isIos = /(iPhone|iPad|iPod)/i.test(ua);
-const isApp = isAndroid || isIos;
+const isApp = isAndroidLike || isIos;
 
 /**
  * 生成一段桥接回调 ID，避免不同调用间的回调名冲突。
@@ -93,7 +95,7 @@ function callApp(event, data = {}, timeoutMs = 1200) {
       finish(resolve, null);
     }, Math.max(300, Number(timeoutMs) || 1200));
 
-    if (isAndroid) {
+    if (isAndroidLike) {
       if (window.androidMethod && typeof window.androidMethod[event] === "function") {
         const payload = JSON.stringify({ ...data, successName, failName });
         window.androidMethod[event](payload);
@@ -129,7 +131,7 @@ function callApp(event, data = {}, timeoutMs = 1200) {
  * @returns {Promise<object|null>} 规范化后的用户信息。
  */
 async function getLoginUserInfo() {
-  if (isAndroid && window.androidMethod && typeof window.androidMethod.jsGetUserBean === "function") {
+  if (isAndroidLike && window.androidMethod && typeof window.androidMethod.jsGetUserBean === "function") {
     try {
       const raw = await Promise.resolve(window.androidMethod.jsGetUserBean());
       return normalizeUserInfo(raw);
@@ -226,6 +228,7 @@ function getBridgeDiagnostics() {
     referrer: getSafeUrlInfo(document.referrer || ""),
     location: getSafeLocationInfo(),
     isAndroid,
+    isHarmony,
     isIos,
     isApp,
     historyLength: window.history.length,
@@ -291,7 +294,7 @@ async function exitH5Page(onAttempt) {
     }
   }
 
-  if (isAndroid) {
+  if (isAndroidLike) {
     const directMethods = [
       "jsOnBackPressed",
       "onBack",
@@ -394,4 +397,13 @@ async function exitH5Page(onAttempt) {
   return false;
 }
 
-export { isAndroid, isIos, isApp, callApp, exitH5Page, getBridgeDiagnostics, getLoginUserInfo };
+export {
+  isAndroid,
+  isHarmony,
+  isIos,
+  isApp,
+  callApp,
+  exitH5Page,
+  getBridgeDiagnostics,
+  getLoginUserInfo,
+};
