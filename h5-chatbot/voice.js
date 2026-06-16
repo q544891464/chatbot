@@ -2,6 +2,8 @@ import { formatRuntimeError, readResponseError } from "./utils.js";
 
 export function createVoiceInput(options) {
   const { el, state, getStoreBase, sendMessage, setTips, updateTextareaHeight } = options;
+  const disabledReason =
+    window.location.protocol === "http:" ? "HTTP 访问已禁用语音功能，请使用 HTTPS 后再试。" : "";
   const voiceState = {
     recording: false,
     transcribing: false,
@@ -22,7 +24,13 @@ export function createVoiceInput(options) {
     voiceState.transcribing = transcribing;
     el.voiceBtn.classList.toggle("is-recording", recording);
     el.voiceBtn.classList.toggle("is-transcribing", transcribing);
-    el.voiceBtn.disabled = state.accessDenied || Boolean(state.inFlight) || transcribing;
+    el.voiceBtn.disabled = Boolean(disabledReason) || state.accessDenied || Boolean(state.inFlight) || transcribing;
+    if (disabledReason) {
+      el.voiceBtn.title = disabledReason;
+      el.voiceBtn.setAttribute("aria-label", disabledReason);
+      if (el.voiceFileInput) el.voiceFileInput.disabled = true;
+      return;
+    }
     el.voiceBtn.title = recording ? "结束录音" : transcribing ? "正在识别" : "语音输入";
     el.voiceBtn.setAttribute("aria-label", el.voiceBtn.title);
   }
@@ -141,6 +149,10 @@ export function createVoiceInput(options) {
   }
 
   async function submitFile(file) {
+    if (disabledReason) {
+      setTips(disabledReason);
+      return;
+    }
     if (!file || state.accessDenied || state.inFlight || voiceState.transcribing) return;
     setUi("transcribing");
     setTips("正在识别语音...");
@@ -159,6 +171,10 @@ export function createVoiceInput(options) {
   }
 
   async function start() {
+    if (disabledReason) {
+      setTips(disabledReason);
+      return;
+    }
     if (state.accessDenied || state.inFlight || voiceState.transcribing) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       if (el.voiceFileInput) {
@@ -227,6 +243,10 @@ export function createVoiceInput(options) {
   }
 
   function toggle() {
+    if (disabledReason) {
+      setTips(disabledReason);
+      return;
+    }
     if (voiceState.recording) {
       stop();
       return;
@@ -234,7 +254,10 @@ export function createVoiceInput(options) {
     start();
   }
 
+  setUi("idle");
+
   return {
+    isDisabled: () => Boolean(disabledReason),
     isRecording: () => voiceState.recording,
     isTranscribing: () => voiceState.transcribing,
     setUi,

@@ -13,7 +13,7 @@ export function setAccessDeniedState(el, state, denied) {
 export function setBusyState(el, state, busy, voiceInput) {
   el.sendBtn.disabled = busy || state.accessDenied;
   if (el.voiceBtn) {
-    el.voiceBtn.disabled = busy || state.accessDenied || voiceInput.isTranscribing();
+    el.voiceBtn.disabled = busy || state.accessDenied || voiceInput.isDisabled() || voiceInput.isTranscribing();
   }
   el.stopBtn.hidden = !busy;
 }
