@@ -17,6 +17,14 @@ const VARIANTS = {
     questionBank: "./question-bank-gongye.json",
     agentConfigId: 6,
   },
+  chanshu: {
+    id: "chanshu",
+    title: "产数AI助手",
+    welcomeTitle: "你好！我是产数AI助手",
+    logo: "./static/AIlogo.png",
+    questionBank: "./question-bank.json",
+    agentConfigId: 3,
+  },
 };
 
 export function getVariant(pathname = window.location.pathname) {
