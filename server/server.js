@@ -13,7 +13,7 @@ const { createAiWikiService, isIntegerMessageId } = require("./services/ai-wiki"
 const { createConversationService } = require("./services/conversations");
 const { createApiRouter } = require("./routes/api-router");
 
-const PORT = Number.parseInt(process.env.PORT || "8787", 10);
+const PORT = Number.parseInt(process.env.PORT || (process.env.NODE_ENV === "production" ? "80" : "8787"), 10);
 const DIFY_BASE_URL = String(process.env.DIFY_BASE_URL || "https://api.dify.ai/v1").replace(/\/+$/, "");
 const DIFY_API_KEY = String(process.env.DIFY_API_KEY || "");
 const CORS_ORIGIN = String(process.env.CORS_ORIGIN || "*");

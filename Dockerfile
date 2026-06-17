@@ -12,4 +12,4 @@ COPY . .
 
 EXPOSE 80
 
-CMD ["npm", "start"]
+CMD PORT=80 node server/server.js
