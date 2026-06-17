@@ -19,8 +19,8 @@ const VARIANTS = {
   },
   chanshu: {
     id: "chanshu",
-    title: "产数AI助手",
-    welcomeTitle: "你好！我是产数AI助手",
+    title: "产数助手",
+    welcomeTitle: "你好！我是产数产品助手",
     logo: "./static/AIlogo.png",
     questionBank: "./question-bank.json",
     agentConfigId: 3,
@@ -28,6 +28,11 @@ const VARIANTS = {
 };
 
 export function getVariant(pathname = window.location.pathname) {
-  const firstSegment = String(pathname || "/").split("/").filter(Boolean)[0] || "";
+  const segments = String(pathname || "/").split("/").filter(Boolean);
+  // /wiki/chatbot/[variant] — 前置 nginx 通过 /wiki/ 路由到本机 /wiki/chatbot/
+  if (segments[0] === "wiki" && segments[1] === "chatbot" && segments[2]) {
+    return VARIANTS[segments[2]] || DEFAULT_VARIANT;
+  }
+  const firstSegment = segments[0] || "";
   return VARIANTS[firstSegment] || DEFAULT_VARIANT;
 }

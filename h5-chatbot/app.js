@@ -117,7 +117,7 @@ const el = {
   videoViewerTitle: document.getElementById("videoViewerTitle"),
   videoViewerHint: document.getElementById("videoViewerHint"),
 };
-const appVariant = getVariant();
+const appVariant = window.__APP_VARIANT__ || getVariant();
 window.__CHATBOT_APP_VARIANT__ = appVariant.id;
 /**
  * 从本地存储恢复页面配置，并补齐默认值。

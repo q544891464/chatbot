@@ -8,8 +8,8 @@ Requires=docker.service
 Type=simple
 User=root
 Group=root
-WorkingDirectory=/root/chatbot/chatbot
-ExecStart=/root/chatbot/chatbot/server/start.sh
+WorkingDirectory=/opt/chatbot
+ExecStart=/opt/chatbot/server/start.sh
 Restart=always
 RestartSec=3
 Environment=PATH=/root/.nvm/versions/node/v22.12.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

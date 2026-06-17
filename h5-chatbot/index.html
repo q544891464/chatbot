@@ -154,6 +154,33 @@
     </div>
 
     <script src="./vendor/markdown-it.min.js"></script>
-    <script type="module" src="./app.js"></script>
+    <script>
+      // 内联 variant 识别 —— CSS/JS 可能被前置 nginx 缓存 7 天，此逻辑不受影响。
+      (function () {
+        var seg = (window.location.pathname || "/").split("/").filter(Boolean);
+        var VARIANTS = {
+          default: { id: "default", title: "政企AI助手", welcomeTitle: "你好！我是政企AI助手", logo: "./static/AIlogo.png", questionBank: "./question-bank.json", agentConfigId: null },
+          gongye:  { id: "gongye",  title: "智改数转诊断助手", welcomeTitle: "你好！我是智改数转诊断助手", logo: "./static/工业logo.png", questionBank: "./question-bank-gongye.json", agentConfigId: 6 },
+          chanshu: { id: "chanshu", title: "产数助手", welcomeTitle: "你好！我是产数产品助手", logo: "./static/AIlogo.png", questionBank: "./question-bank.json", agentConfigId: 3 },
+        };
+        var variant = VARIANTS.default;
+        // /wiki/chatbot/[variant] 和 /[variant] 两种路径模式
+        if (seg[0] === "wiki" && seg[1] === "chatbot" && seg[2] && VARIANTS[seg[2]]) {
+          variant = VARIANTS[seg[2]];
+        } else if (seg[0] && VARIANTS[seg[0]]) {
+          variant = VARIANTS[seg[0]];
+        }
+        // 立即更新 title 和 topbar
+        document.title = variant.title;
+        document.addEventListener("DOMContentLoaded", function () {
+          var nameEl = document.querySelector(".topbar__name");
+          var logoEl = document.querySelector(".topbar__logo img");
+          if (nameEl) nameEl.textContent = variant.title;
+          if (logoEl) { logoEl.src = variant.logo; logoEl.alt = variant.title; }
+        });
+        window.__APP_VARIANT__ = variant;
+      })();
+    </script>
+    <script type="module" src="./app.js?v=20250615"></script>
   </body>
 </html>
