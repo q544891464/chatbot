@@ -92,6 +92,8 @@ const pool = mysql.createPool({
   connectionLimit: DB_CONN_LIMIT,
   queueLimit: 0,
 });
+
+let dbReady = false;
 const altAuthService = createAltAuthService({
   authUrl: ALT_AUTH_URL,
   username: ALT_AUTH_USERNAME,
@@ -192,51 +194,58 @@ function appendClientLog(payload) {
  * @returns {Promise<void>}
  */
 async function ensureSchema() {
-  const conn = await pool.getConnection();
   try {
-    const [messageRows] = await conn.execute(
-      `SELECT COUNT(*) AS count
-       FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = ?
-         AND TABLE_NAME = 'messages'
-         AND COLUMN_NAME = 'external_message_id'`,
-      [DB_NAME],
-    );
-    const messageCount = Number(messageRows?.[0]?.count || 0);
-    if (!messageCount) {
-      await conn.execute(
-        "ALTER TABLE messages ADD COLUMN external_message_id VARCHAR(128) DEFAULT NULL AFTER content",
+    const conn = await pool.getConnection();
+    try {
+      const [messageRows] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'messages'
+           AND COLUMN_NAME = 'external_message_id'`,
+        [DB_NAME],
       );
-    }
+      const messageCount = Number(messageRows?.[0]?.count || 0);
+      if (!messageCount) {
+        await conn.execute(
+          "ALTER TABLE messages ADD COLUMN external_message_id VARCHAR(128) DEFAULT NULL AFTER content",
+        );
+      }
 
-    const [variantRows] = await conn.execute(
-      `SELECT COUNT(*) AS count
-       FROM information_schema.COLUMNS
-       WHERE TABLE_SCHEMA = ?
-         AND TABLE_NAME = 'conversations'
-         AND COLUMN_NAME = 'app_variant'`,
-      [DB_NAME],
-    );
-    const variantCount = Number(variantRows?.[0]?.count || 0);
-    if (!variantCount) {
-      await conn.execute(
-        "ALTER TABLE conversations ADD COLUMN app_variant VARCHAR(64) NOT NULL DEFAULT 'default' AFTER user_id",
+      const [variantRows] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'conversations'
+           AND COLUMN_NAME = 'app_variant'`,
+        [DB_NAME],
       );
-    }
+      const variantCount = Number(variantRows?.[0]?.count || 0);
+      if (!variantCount) {
+        await conn.execute(
+          "ALTER TABLE conversations ADD COLUMN app_variant VARCHAR(64) NOT NULL DEFAULT 'default' AFTER user_id",
+        );
+      }
 
-    await conn.execute(
-      `CREATE TABLE IF NOT EXISTS user_variant_states (
-        user_id BIGINT UNSIGNED NOT NULL,
-        app_variant VARCHAR(64) NOT NULL DEFAULT 'default',
-        active_conversation_key VARCHAR(64) DEFAULT NULL,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        PRIMARY KEY (user_id, app_variant),
-        CONSTRAINT fk_user_variant_states_user FOREIGN KEY (user_id)
-          REFERENCES users(id) ON DELETE CASCADE
-      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
-    );
-  } finally {
-    conn.release();
+      await conn.execute(
+        `CREATE TABLE IF NOT EXISTS user_variant_states (
+          user_id BIGINT UNSIGNED NOT NULL,
+          app_variant VARCHAR(64) NOT NULL DEFAULT 'default',
+          active_conversation_key VARCHAR(64) DEFAULT NULL,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (user_id, app_variant),
+          CONSTRAINT fk_user_variant_states_user FOREIGN KEY (user_id)
+            REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      );
+      dbReady = true;
+      console.log("[DB] Schema check passed, database is ready");
+    } finally {
+      conn.release();
+    }
+  } catch (err) {
+    console.warn("[DB] Schema check failed, database-dependent features disabled:", err.message);
+    dbReady = false;
   }
 }
 
@@ -710,6 +719,10 @@ async function handleMessageMeta(req, res, url) {
     sendJson(res, 400, { error: "Missing messageId" });
     return;
   }
+  if (!dbReady) {
+    sendJson(res, 503, { error: "数据库不可用" });
+    return;
+  }
 
   const [rows] = await pool.execute(
     "SELECT id, role, conversation_id, external_message_id FROM messages WHERE id = ? LIMIT 1",
@@ -741,6 +754,7 @@ async function resolveFeedbackMessageId(messageId, token, cookieHeader = "") {
   const trimmedId = String(messageId || "").trim();
   if (!trimmedId) return "";
   if (isIntegerMessageId(trimmedId)) return trimmedId;
+  if (!dbReady) return trimmedId;
 
   const [rows] = await pool.execute(
     `SELECT m.id AS local_message_id, c.dify_conversation_id AS thread_id
@@ -2512,6 +2526,7 @@ const server = http.createServer(createApiRouter({
     difyBaseUrl: DIFY_BASE_URL,
     keyConfigured: Boolean(DIFY_API_KEY),
     altConfigured: Boolean(ALT_API_TOKEN || ALT_AUTH_URL),
+    dbReady,
   }),
   sendJson,
 }));
@@ -2520,30 +2535,34 @@ const server = http.createServer(createApiRouter({
  * 启动前先补齐数据库结构，再启动 HTTP 服务。
  */
 ensureSchema()
-  .then(() => {
-    server.listen(PORT, "0.0.0.0", () => {
-      const activeUpstreams = {
-        ALT_API_URL,
-        ALT_AUTH_URL,
-        ALT_THREAD_URL: aiWikiService.getThreadUrl(),
-      };
-      // eslint-disable-next-line no-console
-      console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);
-      // eslint-disable-next-line no-console
-      console.log(`Serving static from ${PUBLIC_DIR}`);
-      // eslint-disable-next-line no-console
-      console.log("[Config] Active upstreams:", activeUpstreams);
-      appendJsonLog(SERVER_LOG_PREFIX, {
-        ts: new Date().toISOString(),
-        event: "server:start",
-        port: PORT,
-        publicDir: PUBLIC_DIR,
-        activeUpstreams,
-      });
-    });
-  })
+  .then(() => startServer())
   .catch((err) => {
     // eslint-disable-next-line no-console
-    console.error("Failed to ensure database schema:", err);
-    process.exit(1);
+    console.warn("DB schema check threw unexpected error:", err.message);
+    startServer();
   });
+
+function startServer() {
+  server.listen(PORT, "0.0.0.0", () => {
+    const activeUpstreams = {
+      ALT_API_URL,
+      ALT_AUTH_URL,
+      ALT_THREAD_URL: aiWikiService.getThreadUrl(),
+    };
+    // eslint-disable-next-line no-console
+    console.log(`H5 Chatbot proxy listening on http://localhost:${PORT}`);
+    // eslint-disable-next-line no-console
+    console.log(`Serving static from ${PUBLIC_DIR}`);
+    console.log(`[DB] Database ready: ${dbReady}`);
+    // eslint-disable-next-line no-console
+    console.log("[Config] Active upstreams:", activeUpstreams);
+    appendJsonLog(SERVER_LOG_PREFIX, {
+      ts: new Date().toISOString(),
+      event: "server:start",
+      port: PORT,
+      publicDir: PUBLIC_DIR,
+      dbReady,
+      activeUpstreams,
+    });
+  });
+}
