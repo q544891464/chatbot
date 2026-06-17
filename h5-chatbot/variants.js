@@ -2,7 +2,7 @@ const DEFAULT_VARIANT = {
   id: "default",
   title: "政企AI助手",
   welcomeTitle: "你好！我是政企AI助手",
-  logo: "./static/AIlogo.png",
+  logo: "./static/政企AI助手logo.png",
   questionBank: "./question-bank.json",
   agentConfigId: null,
 };
@@ -21,7 +21,7 @@ const VARIANTS = {
     id: "chanshu",
     title: "产数助手",
     welcomeTitle: "你好！我是产数产品助手",
-    logo: "./static/AIlogo.png",
+    logo: "./static/产数产品助手logo.png",
     questionBank: "./question-bank-chanshu.json",
     agentConfigId: 3,
   },
