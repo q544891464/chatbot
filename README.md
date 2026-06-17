@@ -14,6 +14,7 @@
 - ChatbotAgent 流式聊天
 - ai-wiki 知识库检索进度提示
 - 上游空回答兜底提示
+- 语音输入与音频文件转文字
 - OAuth 登录与用户信息获取
 - MySQL 会话持久化
 - 点赞 / 点踩反馈
@@ -28,7 +29,7 @@
 
 - 浏览器 / H5 前端
   - 入口：`h5-chatbot/index.html`
-  - 负责消息输入、历史展示、认证触发、反馈提交
+  - 负责文本/语音输入、历史展示、认证触发、反馈提交
 - Node 代理层
   - 入口：`server/server.js`
   - 负责静态资源服务、会话同步、认证代理、聊天代理、反馈代理
@@ -53,6 +54,19 @@
 7. 如果上游结束但没有返回可展示文本，Node 和前端都会给出兜底提示，避免空白回复。
 8. 用户点赞 / 点踩时，前端调用 `/api/feedback`，Node 再转发到上游反馈服务。
 9. OAuth 登录通过 `/api/auth-config`、`/api/auth-token`、`/api/auth-userinfo` 完成。
+
+### 语音输入链路
+
+项目当前已支持语音输入，主链路如下：
+
+1. 用户点击输入框旁的麦克风按钮。
+2. 前端 `voice.js` 优先尝试通过 `getUserMedia` 直接录音。
+3. 如果浏览器不支持实时录音，或当前 HTTPS 证书不被浏览器信任，则回退到音频文件选择 / 录制上传。
+4. 前端将录音内容编码为 WAV，或直接上传用户选择的音频文件。
+5. Node 代理通过 `/api/audio-to-text` 把 `multipart/form-data` 请求转发到上游语音转文字服务。
+6. 前端拿到识别文本后自动写回输入框，并沿用现有 `sendMessage` 流程发送聊天请求。
+
+语音能力依赖服务端配置 `AUDIO_TO_TEXT_URL` 和 `AUDIO_TO_TEXT_TOKEN`。如果上游未开启 Speech to text，后端会把明确的错误原因回传给前端。
 
 ## 多入口版本
 
@@ -80,16 +94,23 @@ OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带
 │  ├─ app.js
 │  ├─ auth.js
 │  ├─ chat-api.js
+│  ├─ conversation-store.js
 │  ├─ feedback.js
 │  ├─ markdown.js
-│  ├─ utils.js
+│  ├─ message-renderer.js
 │  ├─ platform-bridge.js
+│  ├─ ui-state.js
+│  ├─ utils.js
 │  ├─ variants.js
+│  ├─ voice.js
 │  ├─ question-bank.json
 │  ├─ question-bank-gongye.json
 │  ├─ static/
 │  └─ vendor/
 ├─ server/
+│  ├─ lib/
+│  ├─ routes/
+│  ├─ services/
 │  ├─ server.js
 │  ├─ start.ps1
 │  ├─ start.sh
@@ -97,7 +118,6 @@ OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带
 │  ├─ sql/
 │  │  ├─ init.sql
 │  │  └─ 20260522_add_app_variant.sql
-│  ├─ data/
 │  └─ logs/
 │     ├─ server-YYYY-MM-DD.log
 │     └─ message-YYYY-MM-DD.log
@@ -123,14 +143,18 @@ OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带
 | --- | --- | --- |
 | `index.html` | 页面结构入口 | 定义聊天区、会话列表、设置面板、反馈弹窗、图片预览层等 DOM 节点 |
 | `styles.css` | 页面样式 | 负责移动端布局、消息气泡、按钮图标、弹窗、侧边会话列表、暗色/浅色视觉层次 |
-| `app.js` | 前端主控制器 | 管理全局状态、渲染消息、发送问题、保存会话、绑定按钮事件、初始化页面 |
+| `app.js` | 前端主控制器 | 管理全局状态、组装各子模块、发送问题、绑定按钮事件、初始化页面 |
 | `auth.js` | OAuth 登录模块 | 获取授权配置、跳转授权页、回调 code 换 token、调用 userinfo、静默登录 |
 | `chat-api.js` | 聊天接口模块 | 创建上游线程、发送聊天请求、解析 SSE 流、处理 `message/meta/progress/message_end` |
+| `conversation-store.js` | 会话存储模块 | 统一封装本地缓存和服务端会话同步 |
 | `feedback.js` | 反馈模块 | 点赞/点踩、点踩原因弹窗、查询反馈状态、确保拿到可反馈的外部消息 ID |
 | `markdown.js` | Markdown 渲染 | 使用 `markdown-it` 渲染文本、链接、图片、代码块，并做基础安全处理 |
+| `message-renderer.js` | 消息渲染模块 | 拆分消息节点生成、Markdown 输出和反馈按钮渲染 |
 | `platform-bridge.js` | App 宿主桥接 | 兼容 Android/iOS 宿主能力，尝试读取 App 内登录用户信息 |
+| `ui-state.js` | UI 状态模块 | 统一处理忙碌态、未授权态、按钮禁用和标题栏显隐 |
 | `variants.js` | 多入口配置 | 根据路径切换标题、logo、问题库和 ai-wiki `agent_config_id` |
 | `utils.js` | 通用工具 | 时间、ID、URL 规范化、错误格式化、会话标题推导、滚动辅助 |
+| `voice.js` | 语音输入模块 | 录音、重采样、WAV 编码、文件上传和语音识别结果回填 |
 | `question-bank.json` | 推荐问题库 | 首屏和追问建议的问题来源 |
 | `question-bank-gongye.json` | 智改数转问题库 | `/gongye` 入口的首屏推荐问题来源 |
 | `vendor/` | 第三方前端库 | 当前包含 SSE 解析器和 Markdown 渲染库 |
@@ -147,11 +171,12 @@ OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带
 | `initPlatformUser` | 页面启动时尝试通过 App 宿主桥获取用户信息，并同步到本地状态 |
 | `initConversations` | 优先从服务端 MySQL 读取会话，失败时回退到本地缓存 |
 | `saveConversations` | 本地缓存和服务端会话同步的统一入口 |
-| `renderAll` / `createMessageNode` | 渲染聊天消息、按钮、反馈状态和空状态 |
+| `renderAll` | 协调会话列表、消息区、建议问题和页面按钮状态 |
 | `sendMessage` | 发送消息的核心流程：追加用户消息、创建线程、发起流式聊天、更新 assistant 气泡 |
 | `stopGeneration` | 中断当前流式请求 |
 | `newChat` / `resetConversation` / `clearChat` | 会话管理 |
 | `getAuthCtx` / `getFeedbackCtx` / `getChatApiCtx` | 给拆分模块注入所需上下文，避免子模块直接依赖全局变量 |
+| `voiceInput` | 语音输入实例，管理录音、上传、识别中的 UI 和发送联动 |
 | `bootstrap` | 页面启动入口，串起用户信息、OAuth 回调、题库、会话和 UI 初始化 |
 
 `sendMessage`
@@ -164,6 +189,8 @@ OAuth 也按入口选择应用配置。前端请求 `/api/auth-config` 时会带
 6. 收到 `message` 时把分片追加到 assistant 消息内容。
 7. 收到 `meta` 时保存上游消息 ID，供反馈接口使用。
 8. 流结束后保存会话；如果没有正文，展示空回答兜底文案。
+
+随着模块拆分，消息节点生成已下沉到 `message-renderer.js`，会话读写集中在 `conversation-store.js`，页面禁用态由 `ui-state.js` 负责，语音输入则通过 `voice.js` 单独管理。这样 `app.js` 仍然是总调度入口，但不再承担所有细节实现。
 
 ### 登录与用户信息代码
 
@@ -207,6 +234,20 @@ OAuth 流程如下：
 - `meta`：上游消息 ID，用于后续反馈。
 - `message_end`：本轮响应结束。
 
+### 语音代码
+
+语音输入相关代码主要分布在前端 `voice.js` 和后端 `server/server.js`：
+
+| 阶段 | 前端函数 | 后端函数 | 说明 |
+| --- | --- | --- | --- |
+| 开始录音 | `start` | - | 申请麦克风权限，初始化 `AudioContext` 和录音缓冲区 |
+| 结束录音 | `stop` | - | 合并 PCM 分片、重采样到 16k、编码为 WAV |
+| 文件上传识别 | `submitFile` | `handleAudioToText` | 兼容浏览器无法实时录音时的音频文件上传 |
+| 语音转文字 | `transcribeAudio` | `handleAudioToText` | 通过 `/api/audio-to-text` 代理上游语音识别服务 |
+| 结果回填 | `sendMessage` 前置调用 | - | 将识别文本写回输入框并直接发送 |
+
+前端麦克风录音依赖浏览器支持 `navigator.mediaDevices.getUserMedia` 且页面运行在受信任的 HTTPS 上下文中；否则会自动回退到音频文件选择。后端只负责透传 `multipart/form-data` 请求，并统一处理上游错误文案。
+
 ### 后端代码说明
 
 后端入口是 `server/server.js`，使用 Node 原生 `http` 模块实现，没有引入 Express。它同时承担三类职责：静态资源服务、业务 API、上游代理。
@@ -245,6 +286,7 @@ OAuth 流程如下：
 | `POST` | `/api/alt-thread` | `handleAltThread` | 创建上游线程 |
 | `POST` | `/api/alt-chat` | `handleAltChat` | 非流式聊天 |
 | `POST` | `/api/alt-chat-stream` | `handleAltChatStream` | 流式聊天主接口 |
+| `POST` | `/api/audio-to-text` | `handleAudioToText` | 代理语音转文字服务，供 H5 语音输入使用 |
 | `POST` | `/api/feedback` | `handleFeedback` | 提交点赞 / 点踩 |
 | `GET` | `/api/feedback` | `handleFeedbackStatus` | 查询某条消息的反馈状态 |
 | `POST` | `/api/chat-messages` | `handleChatMessages` | Dify 兼容代理接口 |
@@ -343,6 +385,17 @@ cp server/.env.example server/.env
 | `CORS_ORIGIN` | 否 | `*` | CORS 允许来源，生产环境建议改为具体域名 |
 | `HIDE_TOPBAR` | 否 | `false` | 是否隐藏 H5 顶部标题栏；仅设为 `true` 时隐藏 |
 
+### 语音转文字配置
+
+| 变量 | 必填 | 默认值 / 行为 | 说明 |
+| --- | --- | --- | --- |
+| `AUDIO_TO_TEXT_URL` | 启用语音输入时建议填写 | 默认指向内置示例地址 | 语音转文字上游接口地址 |
+| `AUDIO_TO_TEXT_TOKEN` | 启用语音输入时必填 | 空 | 语音转文字上游 Bearer Token |
+| `AUDIO_TO_TEXT_USER` | 否 | `lndx` | 转写请求中的用户标识 |
+| `AUDIO_TO_TEXT_TIMEOUT_MS` | 否 | `60000` | 语音转文字请求超时 |
+
+如果没有配置 `AUDIO_TO_TEXT_TOKEN`，前端语音上传会收到“服务端缺少语音转文字配置”的明确报错。若上游返回 “Speech to text is not enabled”，后端会转换成更易排查的中文提示。
+
 ### ChatbotAgent 配置
 
 | 变量 | 必填 | 默认值 / 行为 | 说明 |
@@ -420,6 +473,15 @@ AUTH_SCOPE=openid profile phone email address
 | `FEEDBACK_BASE_URL` | 否 | 空时根据 `ALT_API_URL` 推导 | 反馈服务基地址。通常保持为空，让反馈接口走 ai-wiki 主服务同源地址 |
 | `DIFY_BASE_URL` | 使用 Dify 代理时 | `https://api.dify.ai/v1` | Dify 接口地址 |
 | `DIFY_API_KEY` | 使用 Dify 代理时 | 空 | Dify API Key |
+| `FETCH_TIMEOUT_MS` | 否 | 代码内置默认值 | 通用上游请求超时 |
+| `ALT_AUTH_TIMEOUT_MS` | 否 | `8000` | 上游认证超时 |
+| `ALT_THREAD_TIMEOUT_MS` | 否 | `10000` | 创建线程超时 |
+| `ALT_CHAT_TIMEOUT_MS` | 否 | `20000` | 非流式聊天超时 |
+| `ALT_STREAM_CONNECT_TIMEOUT_MS` | 否 | `20000` | 流式聊天建连超时 |
+| `ALT_FEEDBACK_TIMEOUT_MS` | 否 | `10000` | 反馈接口超时 |
+| `OAUTH_TIMEOUT_MS` | 否 | `10000` | OAuth 请求超时 |
+| `URL_ENTRY_TIMEOUT_MS` | 否 | `10000` | URL 注入用户信息解析超时 |
+| `ALT_AUTH_FAILURE_COOLDOWN_MS` | 否 | `15000` | 上游认证失败后的冷却时间 |
 
 ## 数据库初始化
 

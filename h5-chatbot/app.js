@@ -1143,6 +1143,18 @@ function getVideoLinkInfo(href) {
   return { href: url.href, type, ext };
 }
 
+function getVideoPlaybackUrl(href) {
+  let url;
+  try {
+    url = new URL(String(href || ""), window.location.href);
+  } catch {
+    return href;
+  }
+  if (!["http:", "https:"].includes(url.protocol)) return href;
+  if (url.origin === window.location.origin) return url.href;
+  return `${getStoreBase()}/video-proxy?url=${encodeURIComponent(url.href)}`;
+}
+
 /**
  * 打开图片预览弹层。
  *
@@ -1191,7 +1203,7 @@ function openVideoViewer(info, title = "") {
     }
   } else {
     const source = document.createElement("source");
-    source.src = info.href;
+    source.src = getVideoPlaybackUrl(info.href);
     source.type = info.type;
     player.appendChild(source);
     player.load();

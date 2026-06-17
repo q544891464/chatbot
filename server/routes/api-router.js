@@ -20,6 +20,7 @@ function createApiRouter(deps) {
     handleMessageMeta,
     handleStatic,
     handleUrlEntryUserInfo,
+    handleVideoProxy,
     health,
     sendJson,
   } = deps;
@@ -117,6 +118,11 @@ function createApiRouter(deps) {
 
       if (req.method === "POST" && url.pathname === "/api/audio-to-text") {
         await handleAudioToText(req, res);
+        return;
+      }
+
+      if ((req.method === "GET" || req.method === "HEAD") && url.pathname === "/api/video-proxy") {
+        await handleVideoProxy(req, res, url);
         return;
       }
 

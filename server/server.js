@@ -607,6 +607,55 @@ async function handleChatMessages(req, res) {
   Readable.fromWeb(upstreamRes.body).pipe(res);
 }
 
+async function handleVideoProxy(req, res, url) {
+  const rawUrl = String(url.searchParams.get("url") || "").trim();
+  let target;
+  try {
+    target = new URL(rawUrl);
+  } catch {
+    sendJson(res, 400, { error: "Invalid video url" });
+    return;
+  }
+  if (!["http:", "https:"].includes(target.protocol)) {
+    sendJson(res, 400, { error: "Unsupported video url protocol" });
+    return;
+  }
+
+  const headers = {};
+  const range = String(req.headers.range || "").trim();
+  if (range) headers.Range = range;
+
+  const controller = new AbortController();
+  req.on("close", () => controller.abort());
+
+  const upstreamRes = await safeFetch(target.href, {
+    method: req.method === "HEAD" ? "HEAD" : "GET",
+    headers,
+    signal: controller.signal,
+  }, "Video service", DEFAULT_FETCH_TIMEOUT_MS);
+
+  const proxyHeaders = {
+    ...corsHeaders(),
+    "Content-Type": upstreamRes.headers.get("content-type") || "application/octet-stream",
+    "Accept-Ranges": upstreamRes.headers.get("accept-ranges") || "bytes",
+    "Cache-Control": upstreamRes.headers.get("cache-control") || "public, max-age=3600",
+  };
+  const contentLength = upstreamRes.headers.get("content-length");
+  const contentRange = upstreamRes.headers.get("content-range");
+  if (contentLength) proxyHeaders["Content-Length"] = contentLength;
+  if (contentRange) proxyHeaders["Content-Range"] = contentRange;
+
+  res.writeHead(upstreamRes.status, proxyHeaders);
+  res.flushHeaders?.();
+
+  if (req.method === "HEAD" || !upstreamRes.body) {
+    res.end();
+    return;
+  }
+
+  Readable.fromWeb(upstreamRes.body).pipe(res);
+}
+
 /**
  * 处理会话列表读取接口。
  *
@@ -2457,6 +2506,7 @@ const server = http.createServer(createApiRouter({
   handleMessageMeta,
   handleStatic,
   handleUrlEntryUserInfo,
+  handleVideoProxy,
   health: () => ({
     ok: true,
     difyBaseUrl: DIFY_BASE_URL,
