@@ -197,6 +197,64 @@ async function ensureSchema() {
   try {
     const conn = await pool.getConnection();
     try {
+      // 检查基础表是否存在，不存在则执行初始化建表
+      const [tableCheck] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'users'`,
+        [DB_NAME],
+      );
+      if (Number(tableCheck?.[0]?.count || 0) === 0) {
+        console.log("[DB] Base tables not found, running init schema...");
+        // 先手动建表（不用 init.sql，避免 USE database 语法兼容问题）
+        await conn.execute(`CREATE TABLE IF NOT EXISTS users (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          user_key VARCHAR(128) NOT NULL,
+          active_conversation_key VARCHAR(64) DEFAULT NULL,
+          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (id),
+          UNIQUE KEY uniq_user_key (user_key)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+        await conn.execute(`CREATE TABLE IF NOT EXISTS conversations (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          user_id BIGINT UNSIGNED NOT NULL,
+          app_variant VARCHAR(64) NOT NULL DEFAULT 'default',
+          conversation_key VARCHAR(64) NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          platform VARCHAR(16) NOT NULL,
+          dify_conversation_id VARCHAR(128) DEFAULT NULL,
+          created_at_ms BIGINT NOT NULL,
+          updated_at_ms BIGINT NOT NULL,
+          PRIMARY KEY (id),
+          UNIQUE KEY uniq_user_variant_conversation (user_id, app_variant, conversation_key),
+          KEY idx_user_variant_updated (user_id, app_variant, updated_at_ms),
+          CONSTRAINT fk_conversations_user FOREIGN KEY (user_id)
+            REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+        await conn.execute(`CREATE TABLE IF NOT EXISTS messages (
+          id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          conversation_id BIGINT UNSIGNED NOT NULL,
+          role VARCHAR(16) NOT NULL,
+          content MEDIUMTEXT NOT NULL,
+          external_message_id VARCHAR(128) DEFAULT NULL,
+          time_label VARCHAR(16) NOT NULL DEFAULT '',
+          position INT NOT NULL,
+          created_at_ms BIGINT NOT NULL,
+          PRIMARY KEY (id),
+          KEY idx_conversation_position (conversation_id, position),
+          KEY idx_conversation_time (conversation_id, created_at_ms),
+          CONSTRAINT fk_messages_conversation FOREIGN KEY (conversation_id)
+            REFERENCES conversations(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+
+        console.log("[DB] Base tables created successfully");
+      }
+
+      // 以下迁移逻辑：补齐已有表的缺失字段
       const [messageRows] = await conn.execute(
         `SELECT COUNT(*) AS count
          FROM information_schema.COLUMNS
