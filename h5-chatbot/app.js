@@ -1844,7 +1844,16 @@ if (IS_MOBILE) {
  *
  * @returns {Promise<void>}
  */
+function applyVoiceUrlParam() {
+  const params = new URLSearchParams(window.location.search || "");
+  if (params.get("voice") === "disabled") {
+    if (el.voiceBtn) el.voiceBtn.hidden = true;
+    if (el.voiceFileInput) el.voiceFileInput.hidden = true;
+  }
+}
+
 async function bootstrap() {
+  applyVoiceUrlParam();
   setAuthPending(true);
   clearAccessDeniedLogs();
   await loadAppConfig();

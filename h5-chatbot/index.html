@@ -157,6 +157,12 @@
     <script>
       // 内联 variant 识别 —— CSS/JS 可能被前置 nginx 缓存 7 天，此逻辑不受影响。
       (function () {
+        // voice=disabled
+        if (/[?&]voice=disabled(&|$)/.test(window.location.search || "")) {
+          var s = document.createElement("style");
+          s.textContent = "#voiceBtn,#voiceFileInput{display:none!important}";
+          document.head.appendChild(s);
+        }
         var seg = (window.location.pathname || "/").split("/").filter(Boolean);
         var VARIANTS = {
           default: { id: "default", title: "政企AI助手", welcomeTitle: "你好！我是政企AI助手", logo: "./static/政企AI助手logo.png", questionBank: "./question-bank.json", agentConfigId: null },
