@@ -22,7 +22,7 @@ const VARIANTS = {
     title: "产数助手",
     welcomeTitle: "你好！我是产数产品助手",
     logo: "./static/AIlogo.png",
-    questionBank: "./question-bank.json",
+    questionBank: "./question-bank-chanshu.json",
     agentConfigId: 3,
   },
 };
