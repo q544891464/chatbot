@@ -1,0 +1,15 @@
+.git
+.codex_tmp/
+.env
+env
+node_modules/
+server/data/
+server/logs/
+chatbot-server-*.log
+response_*.json
+certs/
+dist/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
