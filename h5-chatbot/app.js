@@ -569,7 +569,8 @@ const IS_MOBILE = (() => {
  */
 async function initPlatformUser() {
   try {
-    const userInfo = getUrlUserInfo() || (await getLoginUserInfo()) || (await fetchUrlEntryUserInfo());
+    const bridgeUserInfo = await getLoginUserInfo();
+    const userInfo = bridgeUserInfo || getUrlUserInfo() || (await fetchUrlEntryUserInfo());
     state.platformUser = userInfo || null;
     logAuthUserInfo(userInfo?.authSource || "platform-bridge", userInfo);
     const userId = pickPlatformUserId(userInfo);
@@ -1313,7 +1314,7 @@ function getUserMeta() {
     phone: phone || DEFAULT_USER_META.phone,
     orgId,
     departmentId,
-    departmentName: departmentName || org || DEFAULT_USER_META.org,
+    departmentName,
   };
 }
 /**

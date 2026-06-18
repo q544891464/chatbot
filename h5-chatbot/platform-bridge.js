@@ -49,6 +49,39 @@ function normalizeUserInfo(raw) {
   return null;
 }
 
+function pickUserInfoValue(info, keys) {
+  if (!info || typeof info !== "object") return "";
+  for (const key of keys) {
+    const value = String(info[key] || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function scoreUserInfo(info) {
+  if (!info || typeof info !== "object") return 0;
+  let score = 0;
+  if (pickUserInfoValue(info, ["phone", "phone_number", "mobile", "userId", "loginId"])) score += 8;
+  if (pickUserInfoValue(info, ["name", "userName", "username", "nickName"])) score += 4;
+  if (pickUserInfoValue(info, ["departmentId", "department_id", "deptId"])) score += 30;
+  if (pickUserInfoValue(info, ["departmentName", "department_name", "department", "deptName"])) score += 12;
+  if (pickUserInfoValue(info, ["orgId", "org_id"])) score += 2;
+  if (pickUserInfoValue(info, ["orgName", "org", "companyName"])) score += 2;
+  return score;
+}
+
+function mergeUserInfo(base, extra) {
+  if (!base) return extra || null;
+  if (!extra) return base;
+  const merged = { ...base };
+  Object.entries(extra).forEach(([key, value]) => {
+    const current = String(merged[key] ?? "").trim();
+    const next = String(value ?? "").trim();
+    if (!current && next) merged[key] = value;
+  });
+  return merged;
+}
+
 /**
  * 通过 Android/iOS 宿主桥调用原生能力。
  *
@@ -131,30 +164,34 @@ function callApp(event, data = {}, timeoutMs = 1200) {
  * @returns {Promise<object|null>} 规范化后的用户信息。
  */
 async function getLoginUserInfo() {
+  let bestUserInfo = null;
+
   if (isAndroidLike && window.androidMethod && typeof window.androidMethod.jsGetUserBean === "function") {
     try {
       const raw = await Promise.resolve(window.androidMethod.jsGetUserBean());
-      return normalizeUserInfo(raw);
+      bestUserInfo = mergeUserInfo(bestUserInfo, normalizeUserInfo(raw));
     } catch {
-      return null;
+      // try other bridge methods below
     }
   }
 
-  // Fallback to generic bridge call used by iOS/other SDKs.
   if (isApp) {
-    const methods = ["getLoginUserInfo", "jsGetUserBean", "getUserInfo", "jsGetUserInfo", "getLoginUserBean"];
+    const methods = isAndroidLike
+      ? ["getUserInfo", "getLoginUserInfo", "jsGetUserInfo", "getLoginUserBean"]
+      : ["getLoginUserInfo", "jsGetUserBean", "getUserInfo", "jsGetUserInfo", "getLoginUserBean"];
     for (const method of methods) {
       try {
         const data = await callApp(method, {});
         const normalized = normalizeUserInfo(data);
-        if (normalized) return normalized;
+        bestUserInfo = mergeUserInfo(bestUserInfo, normalized);
+        if (pickUserInfoValue(bestUserInfo, ["departmentId", "department_id", "deptId"])) break;
       } catch {
         // try next bridge method
       }
     }
   }
 
-  return null;
+  return bestUserInfo;
 }
 
 function waitForPageHidden(timeout = 500) {
