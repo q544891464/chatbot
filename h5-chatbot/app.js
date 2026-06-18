@@ -273,6 +273,10 @@ function getUrlUserInfo() {
     phone: String(params.get("phone") || params.get("phone_number") || params.get("mobile") || "").trim(),
     userName: String(params.get("userName") || params.get("name") || params.get("nickName") || "").trim(),
     org: String(params.get("org") || params.get("orgName") || params.get("deptName") || "").trim(),
+    orgId: String(params.get("orgId") || "").trim(),
+    orgName: String(params.get("orgName") || "").trim(),
+    departmentId: String(params.get("departmentId") || params.get("deptId") || "").trim(),
+    departmentName: String(params.get("departmentName") || params.get("deptName") || "").trim(),
     authSource: "url-userinfo",
   };
   return pickPlatformUserId(userInfo) ? userInfo : null;
@@ -395,6 +399,21 @@ function serializeConversation(conv) {
     updatedAt: Number(conv.updatedAt || Date.now()),
   };
 }
+
+function getCurrentUserProfile() {
+  const info = state.platformUser || {};
+  const raw = info.raw && typeof info.raw === "object" ? info.raw : {};
+  return {
+    userId: state.config.userId,
+    userName: String(info.userName || info.name || raw.userName || raw.name || "").trim(),
+    phone: String(info.phone || info.phone_number || raw.phone || raw.phone_number || state.config.userId || "").trim(),
+    orgId: String(info.orgId || raw.orgId || "").trim(),
+    orgName: String(info.orgName || info.org || raw.orgName || raw.org || "").trim(),
+    departmentId: String(info.departmentId || raw.departmentId || raw.deptId || "").trim(),
+    departmentName: String(info.departmentName || raw.departmentName || raw.department || raw.deptName || "").trim(),
+    authSource: String(info.authSource || raw.authSource || "").trim(),
+  };
+}
 /**
  * 将服务端返回的消息 ID 回填到本地消息对象中。
  *
@@ -427,6 +446,7 @@ async function syncConversationsToServer(payload) {
     body: JSON.stringify({
       userId: state.config.userId,
       appVariant: state.variant.id,
+      userProfile: getCurrentUserProfile(),
       activeId: payload.activeId,
       items: payload.items,
     }),
@@ -1317,7 +1337,17 @@ function applyUserInfoFromResponse(userInfo) {
   const name = String(userInfo?.name || "").trim();
   const phone = String(userInfo?.phone_number || "").trim();
   const org = String(userInfo?.orgName || "").trim();
-  state.platformUser = { userName: name, phone, org, raw: userInfo || {} };
+  state.platformUser = {
+    userName: name,
+    phone,
+    org,
+    orgId: String(userInfo?.orgId || "").trim(),
+    orgName: org,
+    departmentId: String(userInfo?.departmentId || userInfo?.deptId || "").trim(),
+    departmentName: String(userInfo?.departmentName || userInfo?.department || userInfo?.deptName || "").trim(),
+    authSource: "oauth-userinfo",
+    raw: userInfo || {},
+  };
   logAuthUserInfo("oauth-userinfo", userInfo);
   updateUserInfoDisplay();
   if (phone) {

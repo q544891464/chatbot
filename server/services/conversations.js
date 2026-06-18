@@ -42,7 +42,95 @@ function normalizeAppVariant(appVariant) {
   return String(appVariant || "default").trim().slice(0, 64) || "default";
 }
 
+function pickFirstString(...items) {
+  for (const item of items) {
+    const value = String(item || "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+function normalizeUserProfile(profile, fallbackUserKey = "") {
+  const data = profile && typeof profile === "object" ? profile : {};
+  const raw = data.raw && typeof data.raw === "object" ? data.raw : {};
+  const phone = pickFirstString(
+    data.phone,
+    data.phone_number,
+    data.mobile,
+    data.userId,
+    data.loginId,
+    raw.phone,
+    raw.phone_number,
+    raw.mobile,
+    raw.userId,
+    raw.loginId,
+    fallbackUserKey,
+  );
+  const normalized = {
+    userKey: phone || String(fallbackUserKey || "").trim(),
+    userName: pickFirstString(data.userName, data.name, data.username, raw.userName, raw.name, raw.username),
+    phone,
+    orgId: pickFirstString(data.orgId, raw.orgId),
+    orgName: pickFirstString(data.orgName, data.org, raw.orgName, raw.org),
+    departmentId: pickFirstString(data.departmentId, data.deptId, raw.departmentId, raw.deptId),
+    departmentName: pickFirstString(
+      data.departmentName,
+      data.department,
+      data.deptName,
+      raw.departmentName,
+      raw.department,
+      raw.deptName,
+    ),
+    authSource: pickFirstString(data.authSource, data.source, raw.authSource, raw.source),
+  };
+  normalized.hasProfileData = Boolean(
+    normalized.userName ||
+      normalized.phone ||
+      normalized.orgId ||
+      normalized.orgName ||
+      normalized.departmentId ||
+      normalized.departmentName ||
+      normalized.authSource,
+  );
+  return normalized;
+}
+
 function createConversationService(pool) {
+  async function updateUserProfile(userKey, profile) {
+    const normalized = normalizeUserProfile(profile, userKey);
+    if (!normalized.userKey) return { updated: false };
+    const conn = await pool.getConnection();
+    try {
+      await conn.execute(
+        `INSERT INTO users (
+          user_key, user_name, phone, org_id, org_name, department_id, department_name, auth_source, profile_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON DUPLICATE KEY UPDATE
+          user_name = COALESCE(NULLIF(VALUES(user_name), ''), user_name),
+          phone = COALESCE(NULLIF(VALUES(phone), ''), phone),
+          org_id = COALESCE(NULLIF(VALUES(org_id), ''), org_id),
+          org_name = COALESCE(NULLIF(VALUES(org_name), ''), org_name),
+          department_id = COALESCE(NULLIF(VALUES(department_id), ''), department_id),
+          department_name = COALESCE(NULLIF(VALUES(department_name), ''), department_name),
+          auth_source = COALESCE(NULLIF(VALUES(auth_source), ''), auth_source),
+          profile_updated_at = CURRENT_TIMESTAMP`,
+        [
+          normalized.userKey,
+          normalized.userName || null,
+          normalized.phone || null,
+          normalized.orgId || null,
+          normalized.orgName || null,
+          normalized.departmentId || null,
+          normalized.departmentName || null,
+          normalized.authSource || null,
+        ],
+      );
+      return { updated: true, userKey: normalized.userKey };
+    } finally {
+      conn.release();
+    }
+  }
+
   async function fetchUserConversations(userKey, appVariant = "default") {
     const variant = normalizeAppVariant(appVariant);
     const conn = await pool.getConnection();
@@ -114,14 +202,40 @@ function createConversationService(pool) {
   async function syncUserConversations(userKey, payload, appVariant = "default") {
     const variant = normalizeAppVariant(appVariant);
     const normalized = normalizeUserPayload(payload);
+    const userProfile = normalizeUserProfile(payload?.userProfile, userKey);
     const messageIds = {};
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
 
       const [userResult] = await conn.execute(
-        "INSERT INTO users (user_key, active_conversation_key) VALUES (?, ?) ON DUPLICATE KEY UPDATE active_conversation_key = IF(? = 'default', VALUES(active_conversation_key), active_conversation_key), id = LAST_INSERT_ID(id)",
-        [userKey, variant === "default" ? normalized.activeId || null : null, variant],
+        `INSERT INTO users (
+          user_key, user_name, phone, org_id, org_name, department_id, department_name, auth_source, profile_updated_at, active_conversation_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, IF(? = '', NULL, CURRENT_TIMESTAMP), ?)
+        ON DUPLICATE KEY UPDATE
+          user_name = COALESCE(NULLIF(VALUES(user_name), ''), user_name),
+          phone = COALESCE(NULLIF(VALUES(phone), ''), phone),
+          org_id = COALESCE(NULLIF(VALUES(org_id), ''), org_id),
+          org_name = COALESCE(NULLIF(VALUES(org_name), ''), org_name),
+          department_id = COALESCE(NULLIF(VALUES(department_id), ''), department_id),
+          department_name = COALESCE(NULLIF(VALUES(department_name), ''), department_name),
+          auth_source = COALESCE(NULLIF(VALUES(auth_source), ''), auth_source),
+          profile_updated_at = IF(VALUES(profile_updated_at) IS NULL, profile_updated_at, CURRENT_TIMESTAMP),
+          active_conversation_key = IF(? = 'default', VALUES(active_conversation_key), active_conversation_key),
+          id = LAST_INSERT_ID(id)`,
+        [
+          userKey,
+          userProfile.userName || null,
+          userProfile.phone || null,
+          userProfile.orgId || null,
+          userProfile.orgName || null,
+          userProfile.departmentId || null,
+          userProfile.departmentName || null,
+          userProfile.authSource || null,
+          userProfile.hasProfileData ? "1" : "",
+          variant === "default" ? normalized.activeId || null : null,
+          variant,
+        ],
       );
       const userId = userResult.insertId;
       await conn.execute(
@@ -225,6 +339,7 @@ function createConversationService(pool) {
   return {
     fetchUserConversations,
     syncUserConversations,
+    updateUserProfile,
   };
 }
 
@@ -233,5 +348,6 @@ module.exports = {
   normalizeAppVariant,
   normalizeConversation,
   normalizeMessage,
+  normalizeUserProfile,
   normalizeUserPayload,
 };

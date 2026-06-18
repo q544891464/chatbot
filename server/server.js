@@ -211,11 +211,21 @@ async function ensureSchema() {
         await conn.execute(`CREATE TABLE IF NOT EXISTS users (
           id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
           user_key VARCHAR(128) NOT NULL,
+          user_name VARCHAR(128) DEFAULT NULL,
+          phone VARCHAR(32) DEFAULT NULL,
+          org_id VARCHAR(64) DEFAULT NULL,
+          org_name VARCHAR(255) DEFAULT NULL,
+          department_id VARCHAR(64) DEFAULT NULL,
+          department_name VARCHAR(255) DEFAULT NULL,
+          auth_source VARCHAR(64) DEFAULT NULL,
+          profile_updated_at TIMESTAMP NULL DEFAULT NULL,
           active_conversation_key VARCHAR(64) DEFAULT NULL,
           created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
           PRIMARY KEY (id),
-          UNIQUE KEY uniq_user_key (user_key)
+          UNIQUE KEY uniq_user_key (user_key),
+          KEY idx_users_org_department (org_id, department_id),
+          KEY idx_users_department_name (department_name)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
         await conn.execute(`CREATE TABLE IF NOT EXISTS conversations (
@@ -255,6 +265,48 @@ async function ensureSchema() {
       }
 
       // 以下迁移逻辑：补齐已有表的缺失字段
+      const userProfileColumns = [
+        ["user_name", "ALTER TABLE users ADD COLUMN user_name VARCHAR(128) DEFAULT NULL AFTER user_key"],
+        ["phone", "ALTER TABLE users ADD COLUMN phone VARCHAR(32) DEFAULT NULL AFTER user_name"],
+        ["org_id", "ALTER TABLE users ADD COLUMN org_id VARCHAR(64) DEFAULT NULL AFTER phone"],
+        ["org_name", "ALTER TABLE users ADD COLUMN org_name VARCHAR(255) DEFAULT NULL AFTER org_id"],
+        ["department_id", "ALTER TABLE users ADD COLUMN department_id VARCHAR(64) DEFAULT NULL AFTER org_name"],
+        ["department_name", "ALTER TABLE users ADD COLUMN department_name VARCHAR(255) DEFAULT NULL AFTER department_id"],
+        ["auth_source", "ALTER TABLE users ADD COLUMN auth_source VARCHAR(64) DEFAULT NULL AFTER department_name"],
+        ["profile_updated_at", "ALTER TABLE users ADD COLUMN profile_updated_at TIMESTAMP NULL DEFAULT NULL AFTER auth_source"],
+      ];
+      for (const [columnName, alterSql] of userProfileColumns) {
+        const [rows] = await conn.execute(
+          `SELECT COUNT(*) AS count
+           FROM information_schema.COLUMNS
+           WHERE TABLE_SCHEMA = ?
+             AND TABLE_NAME = 'users'
+             AND COLUMN_NAME = ?`,
+          [DB_NAME, columnName],
+        );
+        if (!Number(rows?.[0]?.count || 0)) {
+          await conn.execute(alterSql);
+        }
+      }
+
+      const userProfileIndexes = [
+        ["idx_users_org_department", "ALTER TABLE users ADD KEY idx_users_org_department (org_id, department_id)"],
+        ["idx_users_department_name", "ALTER TABLE users ADD KEY idx_users_department_name (department_name)"],
+      ];
+      for (const [indexName, alterSql] of userProfileIndexes) {
+        const [rows] = await conn.execute(
+          `SELECT COUNT(*) AS count
+           FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = ?
+             AND TABLE_NAME = 'users'
+             AND INDEX_NAME = ?`,
+          [DB_NAME, indexName],
+        );
+        if (!Number(rows?.[0]?.count || 0)) {
+          await conn.execute(alterSql);
+        }
+      }
+
       const [messageRows] = await conn.execute(
         `SELECT COUNT(*) AS count
          FROM information_schema.COLUMNS
@@ -2041,6 +2093,7 @@ async function handleAuthUserInfo(req, res) {
       status: upstreamRes.status,
       data,
     });
+    await persistUserProfile(data, "oauth-userinfo");
     sendJson(res, 200, data);
   } catch {
     appendAuthUserInfoLog({
@@ -2070,6 +2123,25 @@ function pickVerifiedUserId(userInfo) {
     if (value) return value;
   }
   return "";
+}
+
+async function persistUserProfile(userInfo, source = "") {
+  if (!userInfo || typeof userInfo !== "object") return;
+  const userKey = pickVerifiedUserId(userInfo);
+  if (!userKey) return;
+  try {
+    await conversationService.updateUserProfile(userKey, {
+      ...userInfo,
+      authSource: source || userInfo.authSource || userInfo.source || "",
+    });
+  } catch (err) {
+    appendAuthUserInfoLog({
+      event: "auth:userinfo:persist-error",
+      source,
+      userKey,
+      error: String(err?.message || err || ""),
+    });
+  }
 }
 
 function unwrapVerifiedUserInfo(data) {
@@ -2147,6 +2219,7 @@ async function handleUrlEntryUserInfo(req, res) {
     appId: userInfo.appId || appId,
     authSource: "url-entry",
   };
+  await persistUserProfile(safeUserInfo, "url-entry");
   appendAuthUserInfoLog({
     event: "auth:url-entry:success",
     url: URL_ENTRY_VERIFY_URL,
@@ -2161,11 +2234,14 @@ async function handleUrlEntryUserInfo(req, res) {
 
 async function handleAuthUserInfoClientLog(req, res) {
   const body = await readBodyJson(req);
+  const source = String(body.source || "client");
+  const userInfo = body.userInfo || body.data || {};
   appendAuthUserInfoLog({
     event: "auth:userinfo:client",
-    source: String(body.source || "client"),
-    data: body.userInfo || body.data || {},
+    source,
+    data: userInfo,
   });
+  await persistUserProfile(userInfo, source);
   sendJson(res, 200, { ok: true });
 }
 

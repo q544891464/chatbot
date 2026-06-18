@@ -9,11 +9,21 @@ USE chatbot;
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_key VARCHAR(128) NOT NULL,
+  user_name VARCHAR(128) DEFAULT NULL,
+  phone VARCHAR(32) DEFAULT NULL,
+  org_id VARCHAR(64) DEFAULT NULL,
+  org_name VARCHAR(255) DEFAULT NULL,
+  department_id VARCHAR(64) DEFAULT NULL,
+  department_name VARCHAR(255) DEFAULT NULL,
+  auth_source VARCHAR(64) DEFAULT NULL,
+  profile_updated_at TIMESTAMP NULL DEFAULT NULL,
   active_conversation_key VARCHAR(64) DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uniq_user_key (user_key)
+  UNIQUE KEY uniq_user_key (user_key),
+  KEY idx_users_org_department (org_id, department_id),
+  KEY idx_users_department_name (department_name)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS conversations (
