@@ -1291,7 +1291,7 @@ function shouldLockScrollBoundary(scroller, currentY) {
 /**
  * 组合当前用户元信息，供线程创建和聊天接口使用。
  *
- * @returns {{userName: string, org: string, phone: string}} 用户元数据。
+ * @returns {{userName: string, org: string, phone: string, orgId: string, departmentId: string, departmentName: string}} 用户元数据。
  */
 function getUserMeta() {
   const info = state.platformUser || {};
@@ -1302,10 +1302,18 @@ function getUserMeta() {
     info.org || info.departmentName || info.orgName || "",
   ).trim();
   const phone = String(info.phone || info.phone_number || info.mobile || "").trim();
+  const orgId = String(info.orgId || info.org_id || "").trim();
+  const departmentId = String(info.departmentId || info.department_id || info.deptId || "").trim();
+  const departmentName = String(
+    info.departmentName || info.department || info.deptName || "",
+  ).trim();
   return {
     userName: userName || DEFAULT_USER_META.userName,
     org: org || DEFAULT_USER_META.org,
     phone: phone || DEFAULT_USER_META.phone,
+    orgId,
+    departmentId,
+    departmentName: departmentName || org || DEFAULT_USER_META.org,
   };
 }
 /**
