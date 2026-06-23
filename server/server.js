@@ -217,6 +217,7 @@ async function ensureSchema() {
           org_name VARCHAR(255) DEFAULT NULL,
           department_id VARCHAR(64) DEFAULT NULL,
           department_name VARCHAR(255) DEFAULT NULL,
+          department_path VARCHAR(1024) DEFAULT NULL,
           auth_source VARCHAR(64) DEFAULT NULL,
           profile_updated_at TIMESTAMP NULL DEFAULT NULL,
           active_conversation_key VARCHAR(64) DEFAULT NULL,
@@ -225,7 +226,8 @@ async function ensureSchema() {
           PRIMARY KEY (id),
           UNIQUE KEY uniq_user_key (user_key),
           KEY idx_users_org_department (org_id, department_id),
-          KEY idx_users_department_name (department_name)
+          KEY idx_users_department_name (department_name),
+          KEY idx_users_department_path (department_path(255))
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
 
         await conn.execute(`CREATE TABLE IF NOT EXISTS conversations (
@@ -272,7 +274,8 @@ async function ensureSchema() {
         ["org_name", "ALTER TABLE users ADD COLUMN org_name VARCHAR(255) DEFAULT NULL AFTER org_id"],
         ["department_id", "ALTER TABLE users ADD COLUMN department_id VARCHAR(64) DEFAULT NULL AFTER org_name"],
         ["department_name", "ALTER TABLE users ADD COLUMN department_name VARCHAR(255) DEFAULT NULL AFTER department_id"],
-        ["auth_source", "ALTER TABLE users ADD COLUMN auth_source VARCHAR(64) DEFAULT NULL AFTER department_name"],
+        ["department_path", "ALTER TABLE users ADD COLUMN department_path VARCHAR(1024) DEFAULT NULL AFTER department_name"],
+        ["auth_source", "ALTER TABLE users ADD COLUMN auth_source VARCHAR(64) DEFAULT NULL AFTER department_path"],
         ["profile_updated_at", "ALTER TABLE users ADD COLUMN profile_updated_at TIMESTAMP NULL DEFAULT NULL AFTER auth_source"],
       ];
       for (const [columnName, alterSql] of userProfileColumns) {
@@ -292,6 +295,7 @@ async function ensureSchema() {
       const userProfileIndexes = [
         ["idx_users_org_department", "ALTER TABLE users ADD KEY idx_users_org_department (org_id, department_id)"],
         ["idx_users_department_name", "ALTER TABLE users ADD KEY idx_users_department_name (department_name)"],
+        ["idx_users_department_path", "ALTER TABLE users ADD KEY idx_users_department_path (department_path(255))"],
       ];
       for (const [indexName, alterSql] of userProfileIndexes) {
         const [rows] = await conn.execute(
@@ -348,6 +352,63 @@ async function ensureSchema() {
             REFERENCES users(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
       );
+
+      await conn.execute(
+        `CREATE TABLE IF NOT EXISTS chatbot_address_book_departments (
+          department_id VARCHAR(64) NOT NULL,
+          department_name VARCHAR(255) NOT NULL,
+          parent_department_id VARCHAR(64) DEFAULT NULL,
+          department_path VARCHAR(1024) DEFAULT NULL,
+          department_path_json TEXT DEFAULT NULL,
+          member_count INT DEFAULT NULL,
+          hide_count INT DEFAULT NULL,
+          sort_index INT DEFAULT NULL,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (department_id),
+          KEY idx_address_book_departments_parent (parent_department_id),
+          KEY idx_address_book_departments_name (department_name),
+          KEY idx_address_book_departments_path (department_path(255))
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      );
+
+      await conn.execute(
+        `CREATE TABLE IF NOT EXISTS chatbot_address_book_users (
+          phone VARCHAR(32) NOT NULL,
+          user_name VARCHAR(128) DEFAULT NULL,
+          union_id VARCHAR(128) DEFAULT NULL,
+          customer_id VARCHAR(128) DEFAULT NULL,
+          department_id VARCHAR(64) DEFAULT NULL,
+          department_name VARCHAR(255) DEFAULT NULL,
+          department_path VARCHAR(1024) DEFAULT NULL,
+          department_path_json TEXT DEFAULT NULL,
+          raw_json JSON DEFAULT NULL,
+          updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          PRIMARY KEY (phone),
+          KEY idx_address_book_users_department (department_id),
+          KEY idx_address_book_users_name (user_name),
+          KEY idx_address_book_users_department_path (department_path(255)),
+          CONSTRAINT fk_address_book_users_department FOREIGN KEY (department_id)
+            REFERENCES chatbot_address_book_departments(department_id) ON DELETE SET NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+      );
+
+      const addressBookColumns = [
+        ["chatbot_address_book_departments", "department_path", "ALTER TABLE chatbot_address_book_departments ADD COLUMN department_path VARCHAR(1024) DEFAULT NULL AFTER parent_department_id"],
+        ["chatbot_address_book_users", "department_path", "ALTER TABLE chatbot_address_book_users ADD COLUMN department_path VARCHAR(1024) DEFAULT NULL AFTER department_name"],
+      ];
+      for (const [tableName, columnName, alterSql] of addressBookColumns) {
+        const [rows] = await conn.execute(
+          `SELECT COUNT(*) AS count
+           FROM information_schema.COLUMNS
+           WHERE TABLE_SCHEMA = ?
+             AND TABLE_NAME = ?
+             AND COLUMN_NAME = ?`,
+          [DB_NAME, tableName, columnName],
+        );
+        if (!Number(rows?.[0]?.count || 0)) {
+          await conn.execute(alterSql);
+        }
+      }
       dbReady = true;
       console.log("[DB] Schema check passed, database is ready");
     } finally {

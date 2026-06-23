@@ -1,3 +1,5 @@
+const { enrichProfileByPhone, normalizePhone } = require("./address-book");
+
 function normalizeMessage(msg) {
   const role = msg?.role === "assistant" ? "assistant" : "user";
   const content = String(msg?.content || "");
@@ -53,7 +55,7 @@ function pickFirstString(...items) {
 function normalizeUserProfile(profile, fallbackUserKey = "") {
   const data = profile && typeof profile === "object" ? profile : {};
   const raw = data.raw && typeof data.raw === "object" ? data.raw : {};
-  const phone = pickFirstString(
+  const phone = normalizePhone(pickFirstString(
     data.phone,
     data.phone_number,
     data.mobile,
@@ -65,7 +67,7 @@ function normalizeUserProfile(profile, fallbackUserKey = "") {
     raw.userId,
     raw.loginId,
     fallbackUserKey,
-  );
+  ));
   const normalized = {
     userKey: phone || String(fallbackUserKey || "").trim(),
     userName: pickFirstString(data.userName, data.name, data.username, raw.userName, raw.name, raw.username),
@@ -81,6 +83,7 @@ function normalizeUserProfile(profile, fallbackUserKey = "") {
       raw.department,
       raw.deptName,
     ),
+    departmentPath: pickFirstString(data.departmentPath, data.department_path, raw.departmentPath, raw.department_path),
     authSource: pickFirstString(data.authSource, data.source, raw.authSource, raw.source),
   };
   normalized.hasProfileData = Boolean(
@@ -90,6 +93,7 @@ function normalizeUserProfile(profile, fallbackUserKey = "") {
       normalized.orgName ||
       normalized.departmentId ||
       normalized.departmentName ||
+      normalized.departmentPath ||
       normalized.authSource,
   );
   return normalized;
@@ -97,14 +101,15 @@ function normalizeUserProfile(profile, fallbackUserKey = "") {
 
 function createConversationService(pool) {
   async function updateUserProfile(userKey, profile) {
-    const normalized = normalizeUserProfile(profile, userKey);
+    let normalized = normalizeUserProfile(profile, userKey);
     if (!normalized.userKey) return { updated: false };
     const conn = await pool.getConnection();
     try {
+      normalized = await enrichProfileByPhone(conn, normalized);
       await conn.execute(
         `INSERT INTO users (
-          user_key, user_name, phone, org_id, org_name, department_id, department_name, auth_source, profile_updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+          user_key, user_name, phone, org_id, org_name, department_id, department_name, department_path, auth_source, profile_updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON DUPLICATE KEY UPDATE
           user_name = COALESCE(NULLIF(VALUES(user_name), ''), user_name),
           phone = COALESCE(NULLIF(VALUES(phone), ''), phone),
@@ -112,6 +117,7 @@ function createConversationService(pool) {
           org_name = COALESCE(NULLIF(VALUES(org_name), ''), org_name),
           department_id = COALESCE(NULLIF(VALUES(department_id), ''), department_id),
           department_name = COALESCE(NULLIF(VALUES(department_name), ''), department_name),
+          department_path = COALESCE(NULLIF(VALUES(department_path), ''), department_path),
           auth_source = COALESCE(NULLIF(VALUES(auth_source), ''), auth_source),
           profile_updated_at = CURRENT_TIMESTAMP`,
         [
@@ -122,6 +128,7 @@ function createConversationService(pool) {
           normalized.orgName || null,
           normalized.departmentId || null,
           normalized.departmentName || null,
+          normalized.departmentPath || null,
           normalized.authSource || null,
         ],
       );
@@ -202,16 +209,17 @@ function createConversationService(pool) {
   async function syncUserConversations(userKey, payload, appVariant = "default") {
     const variant = normalizeAppVariant(appVariant);
     const normalized = normalizeUserPayload(payload);
-    const userProfile = normalizeUserProfile(payload?.userProfile, userKey);
+    let userProfile = normalizeUserProfile(payload?.userProfile, userKey);
     const messageIds = {};
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
+      userProfile = await enrichProfileByPhone(conn, userProfile);
 
       const [userResult] = await conn.execute(
         `INSERT INTO users (
-          user_key, user_name, phone, org_id, org_name, department_id, department_name, auth_source, profile_updated_at, active_conversation_key
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, IF(? = '', NULL, CURRENT_TIMESTAMP), ?)
+          user_key, user_name, phone, org_id, org_name, department_id, department_name, department_path, auth_source, profile_updated_at, active_conversation_key
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, IF(? = '', NULL, CURRENT_TIMESTAMP), ?)
         ON DUPLICATE KEY UPDATE
           user_name = COALESCE(NULLIF(VALUES(user_name), ''), user_name),
           phone = COALESCE(NULLIF(VALUES(phone), ''), phone),
@@ -219,6 +227,7 @@ function createConversationService(pool) {
           org_name = COALESCE(NULLIF(VALUES(org_name), ''), org_name),
           department_id = COALESCE(NULLIF(VALUES(department_id), ''), department_id),
           department_name = COALESCE(NULLIF(VALUES(department_name), ''), department_name),
+          department_path = COALESCE(NULLIF(VALUES(department_path), ''), department_path),
           auth_source = COALESCE(NULLIF(VALUES(auth_source), ''), auth_source),
           profile_updated_at = IF(VALUES(profile_updated_at) IS NULL, profile_updated_at, CURRENT_TIMESTAMP),
           active_conversation_key = IF(? = 'default', VALUES(active_conversation_key), active_conversation_key),
@@ -231,6 +240,7 @@ function createConversationService(pool) {
           userProfile.orgName || null,
           userProfile.departmentId || null,
           userProfile.departmentName || null,
+          userProfile.departmentPath || null,
           userProfile.authSource || null,
           userProfile.hasProfileData ? "1" : "",
           variant === "default" ? normalized.activeId || null : null,

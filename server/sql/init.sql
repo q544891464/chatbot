@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   org_name VARCHAR(255) DEFAULT NULL,
   department_id VARCHAR(64) DEFAULT NULL,
   department_name VARCHAR(255) DEFAULT NULL,
+  department_path VARCHAR(1024) DEFAULT NULL,
   auth_source VARCHAR(64) DEFAULT NULL,
   profile_updated_at TIMESTAMP NULL DEFAULT NULL,
   active_conversation_key VARCHAR(64) DEFAULT NULL,
@@ -23,7 +24,8 @@ CREATE TABLE IF NOT EXISTS users (
   PRIMARY KEY (id),
   UNIQUE KEY uniq_user_key (user_key),
   KEY idx_users_org_department (org_id, department_id),
-  KEY idx_users_department_name (department_name)
+  KEY idx_users_department_name (department_name),
+  KEY idx_users_department_path (department_path(255))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS conversations (
@@ -51,6 +53,41 @@ CREATE TABLE IF NOT EXISTS user_variant_states (
   PRIMARY KEY (user_id, app_variant),
   CONSTRAINT fk_user_variant_states_user FOREIGN KEY (user_id)
     REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS chatbot_address_book_departments (
+  department_id VARCHAR(64) NOT NULL,
+  department_name VARCHAR(255) NOT NULL,
+  parent_department_id VARCHAR(64) DEFAULT NULL,
+  department_path VARCHAR(1024) DEFAULT NULL,
+  department_path_json TEXT DEFAULT NULL,
+  member_count INT DEFAULT NULL,
+  hide_count INT DEFAULT NULL,
+  sort_index INT DEFAULT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (department_id),
+  KEY idx_address_book_departments_parent (parent_department_id),
+  KEY idx_address_book_departments_name (department_name),
+  KEY idx_address_book_departments_path (department_path(255))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS chatbot_address_book_users (
+  phone VARCHAR(32) NOT NULL,
+  user_name VARCHAR(128) DEFAULT NULL,
+  union_id VARCHAR(128) DEFAULT NULL,
+  customer_id VARCHAR(128) DEFAULT NULL,
+  department_id VARCHAR(64) DEFAULT NULL,
+  department_name VARCHAR(255) DEFAULT NULL,
+  department_path VARCHAR(1024) DEFAULT NULL,
+  department_path_json TEXT DEFAULT NULL,
+  raw_json JSON DEFAULT NULL,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (phone),
+  KEY idx_address_book_users_department (department_id),
+  KEY idx_address_book_users_name (user_name),
+  KEY idx_address_book_users_department_path (department_path(255)),
+  CONSTRAINT fk_address_book_users_department FOREIGN KEY (department_id)
+    REFERENCES chatbot_address_book_departments(department_id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE IF NOT EXISTS messages (
