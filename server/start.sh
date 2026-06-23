@@ -41,6 +41,44 @@ get_lan_ipv4() {
   fi
 }
 
+
+wait_for_database() {
+  local max_attempts="${DB_WAIT_ATTEMPTS:-30}"
+  local sleep_seconds="${DB_WAIT_INTERVAL:-3}"
+
+  if [[ -z "${DB_HOST:-}" || -z "${DB_USER:-}" || -z "${DB_NAME:-}" ]]; then
+    return 0
+  fi
+
+  echo "Waiting for database ${DB_HOST}:${DB_PORT:-3306}/${DB_NAME} ..."
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if node - <<'NODE' >/dev/null 2>&1
+const mysql = require('mysql2/promise');
+(async () => {
+  const conn = await mysql.createConnection({
+    host: process.env.DB_HOST || '127.0.0.1',
+    port: Number(process.env.DB_PORT || 3306),
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME,
+    connectTimeout: 5000,
+  });
+  await conn.query('SELECT 1');
+  await conn.end();
+})().catch(() => process.exit(1));
+NODE
+    then
+      echo "Database is reachable"
+      return 0
+    fi
+
+    echo "Database not ready yet (${attempt}/${max_attempts}), retrying in ${sleep_seconds}s ..."
+    sleep "${sleep_seconds}"
+  done
+
+  echo "Database is still not reachable after $((max_attempts * sleep_seconds))s; starting anyway"
+}
+
 cd "${PROJECT_ROOT}"
 
 load_dotenv_file "${PROJECT_ROOT}/server/.env"
@@ -55,5 +93,7 @@ LAN_IPS="$(get_lan_ipv4 | paste -sd ', ' -)"
 if [[ -n "${LAN_IPS}" ]]; then
   echo "LAN IP: ${LAN_IPS}"
 fi
+
+wait_for_database
 
 exec node server/server.js
