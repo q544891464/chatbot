@@ -4,7 +4,7 @@ const DEFAULT_VARIANT = {
   welcomeTitle: "你好！我是政企AI助手",
   logo: "./static/政企AI助手logo.png",
   questionBank: "./question-bank.json",
-  agentConfigId: null,
+  agentConfigId: 7,
 };
 
 const VARIANTS = {

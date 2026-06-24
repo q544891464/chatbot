@@ -58,6 +58,35 @@ function pickUserInfoValue(info, keys) {
   return "";
 }
 
+function getLogBaseUrl() {
+  const path = window.location.pathname || "/";
+  const marker = "/h5-chatbot/";
+  const idx = path.indexOf(marker);
+  if (idx >= 0) return `${window.location.origin}${path.slice(0, idx)}/api`;
+  return `${window.location.origin}/api`;
+}
+
+function logBridgeUserInfo(method, info, error = "") {
+  const payload = {
+    method,
+    ok: Boolean(info),
+    score: scoreUserInfo(info),
+    hasPhone: Boolean(pickUserInfoValue(info, ["phone", "phone_number", "mobile", "userId", "loginId"])),
+    hasDepartmentId: Boolean(pickUserInfoValue(info, ["departmentId", "department_id", "deptId"])),
+    hasDepartmentName: Boolean(pickUserInfoValue(info, ["departmentName", "department_name", "department", "deptName"])),
+    hasOrgId: Boolean(pickUserInfoValue(info, ["orgId", "org_id"])),
+    hasOrgName: Boolean(pickUserInfoValue(info, ["orgName", "org", "companyName"])),
+    keys: info && typeof info === "object" ? Object.keys(info).slice(0, 30) : [],
+    error: error ? String(error).slice(0, 160) : "",
+  };
+  fetch(`${getLogBaseUrl()}/client-log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event: "bridge:userinfo:method", source: "platform-bridge", data: payload }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
 function scoreUserInfo(info) {
   if (!info || typeof info !== "object") return 0;
   let score = 0;
@@ -78,6 +107,18 @@ function mergeUserInfo(base, extra) {
     const current = String(merged[key] ?? "").trim();
     const next = String(value ?? "").trim();
     if (!current && next) merged[key] = value;
+  });
+  [
+    ["departmentId", "department_id", "deptId"],
+    ["departmentName", "department_name", "department", "deptName"],
+    ["orgId", "org_id"],
+    ["orgName", "org", "companyName"],
+    ["phone", "phone_number", "mobile", "userId", "loginId"],
+    ["name", "userName", "username", "nickName"],
+  ].forEach((keys) => {
+    const current = pickUserInfoValue(merged, keys);
+    const next = pickUserInfoValue(extra, keys);
+    if (!current && next) merged[keys[0]] = next;
   });
   return merged;
 }
@@ -169,8 +210,11 @@ async function getLoginUserInfo() {
   if (isAndroidLike && window.androidMethod && typeof window.androidMethod.jsGetUserBean === "function") {
     try {
       const raw = await Promise.resolve(window.androidMethod.jsGetUserBean());
-      bestUserInfo = mergeUserInfo(bestUserInfo, normalizeUserInfo(raw));
-    } catch {
+      const normalized = normalizeUserInfo(raw);
+      logBridgeUserInfo("android.jsGetUserBean", normalized);
+      bestUserInfo = mergeUserInfo(bestUserInfo, normalized);
+    } catch (err) {
+      logBridgeUserInfo("android.jsGetUserBean", null, err?.message || err);
       // try other bridge methods below
     }
   }
@@ -183,9 +227,11 @@ async function getLoginUserInfo() {
       try {
         const data = await callApp(method, {});
         const normalized = normalizeUserInfo(data);
+        logBridgeUserInfo(method, normalized);
         bestUserInfo = mergeUserInfo(bestUserInfo, normalized);
         if (pickUserInfoValue(bestUserInfo, ["departmentId", "department_id", "deptId"])) break;
-      } catch {
+      } catch (err) {
+        logBridgeUserInfo(method, null, err?.message || err);
         // try next bridge method
       }
     }

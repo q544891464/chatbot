@@ -1812,61 +1812,72 @@ async function handleAltChatStream(req, res) {
     lastProgress: "",
   };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    let idx;
-    while ((idx = buffer.indexOf("\n")) >= 0) {
-      const line = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 1);
-      const text = line.trim();
-      if (!text) continue;
-      try {
-        const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
-        logAltRawPayload(payloadObj);
-        state.lastPayload = payloadObj;
-        writeAltProgress(res, state, payloadObj);
-        const externalMessageId = extractAltMessageId(payloadObj);
-        if (externalMessageId) {
-          state.externalMessageId = externalMessageId;
-          if (!state.metaSent) {
-            state.metaSent = true;
-            res.write(
-              `data: ${JSON.stringify({
-                event: "meta",
-                messageId: externalMessageId,
-              })}\n\n`,
-            );
+  let streamReadError = null;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+      let idx;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 1);
+        const text = line.trim();
+        if (!text) continue;
+        try {
+          const payloadObj = JSON.parse(text.startsWith("data:") ? text.slice(5).trim() : text);
+          logAltRawPayload(payloadObj);
+          state.lastPayload = payloadObj;
+          writeAltProgress(res, state, payloadObj);
+          const externalMessageId = extractAltMessageId(payloadObj);
+          if (externalMessageId) {
+            state.externalMessageId = externalMessageId;
+            if (!state.metaSent) {
+              state.metaSent = true;
+              res.write(
+                `data: ${JSON.stringify({
+                  event: "meta",
+                  messageId: externalMessageId,
+                })}\n\n`,
+              );
+            }
           }
-        }
-        const errorText = extractAltError(payloadObj);
-        if (errorText) {
-          if (!state.errorSent) {
-            state.errorSent = true;
-            res.write(`data: ${JSON.stringify({ event: "message", answer: errorText })}\n\n`);
+          const errorText = extractAltError(payloadObj);
+          if (errorText) {
+            if (!state.errorSent) {
+              state.errorSent = true;
+              res.write(`data: ${JSON.stringify({ event: "message", answer: errorText })}\n\n`);
+            }
+            continue;
           }
-          continue;
-        }
-        const chunk = extractAltChunk(payloadObj);
-        if (chunk !== null) {
-          const delta = appendAltStream(state, chunk);
-          if (delta) {
-            res.write(`data: ${JSON.stringify({ event: "message", answer: delta })}\n\n`);
-          } else if (chunk && !state.toolBlock && !state.toolDump) {
-            state.streamedText += chunk;
-            res.write(
-              `data: ${JSON.stringify({ event: "message", answer: chunk })}\n\n`,
-            );
+          const chunk = extractAltChunk(payloadObj);
+          if (chunk !== null) {
+            const delta = appendAltStream(state, chunk);
+            if (delta) {
+              res.write(`data: ${JSON.stringify({ event: "message", answer: delta })}\n\n`);
+            } else if (chunk && !state.toolBlock && !state.toolDump) {
+              state.streamedText += chunk;
+              res.write(
+                `data: ${JSON.stringify({ event: "message", answer: chunk })}\n\n`,
+              );
+            }
+          } else {
+            captureAltFinalText(state, payloadObj);
           }
-        } else {
-          captureAltFinalText(state, payloadObj);
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
     }
+  } catch (err) {
+    streamReadError = err;
+    logMessageSummary(requestId, "stream-read-error", {
+      threadId: threadIdForLog,
+      queryLength: payload.query.length,
+      error: String(err?.message || err || ""),
+      answerLength: (state.streamedText || state.finalText || "").length,
+    });
   }
 
   if (buffer.trim()) {
@@ -1913,6 +1924,14 @@ async function handleAltChatStream(req, res) {
     } catch {
       // ignore
     }
+  }
+
+  if (streamReadError && !state.errorSent && !state.streamedText && !state.finalText) {
+    state.errorSent = true;
+    state.finalText = "聊天上游连接中断，请稍后重试。";
+    res.write(
+      `data: ${JSON.stringify({ event: "message", answer: state.finalText })}\n\n`,
+    );
   }
 
   if (!state.errorSent && !state.streamedText && !state.finalText && state.lastPayload) {
