@@ -2173,6 +2173,27 @@ async function handleAltThreadAttachmentDelete(req, res, threadId, fileId) {
  * @param {http.ServerResponse} res 响应对象。
  * @returns {Promise<void>}
  */
+async function exchangeOAuthToken(tokenUrl, oauthConfig, code, redirectUri) {
+  const params = new URLSearchParams();
+  params.set("grant_type", "authorization_code");
+  params.set("client_id", oauthConfig.clientId);
+  params.set("client_secret", oauthConfig.clientSecret);
+  params.set("code", code);
+  params.set("redirect_uri", redirectUri);
+
+  const upstreamRes = await safeFetch(tokenUrl, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: params.toString(),
+  }, "OAuth Token service", OAUTH_TIMEOUT_MS);
+
+  const text = await upstreamRes.text().catch(() => "");
+  return { ok: upstreamRes.ok, status: upstreamRes.status, text };
+}
+
 async function handleAuthToken(req, res) {
   const tokenUrl = getAuthTokenUrlBase();
   if (!tokenUrl) {
@@ -2202,33 +2223,32 @@ async function handleAuthToken(req, res) {
     return;
   }
 
-  const params = new URLSearchParams();
-  params.set("grant_type", "authorization_code");
-  params.set("client_id", oauthConfig.clientId);
-  params.set("client_secret", oauthConfig.clientSecret);
-  params.set("code", code);
-  params.set("redirect_uri", redirectUri);
+  // 第一次尝试：使用客户端传递的 redirectUri（动态页面地址）
+  let result = await exchangeOAuthToken(tokenUrl, oauthConfig, code, redirectUri);
 
-  const upstreamRes = await safeFetch(tokenUrl, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: params.toString(),
-  }, "OAuth Token service", OAUTH_TIMEOUT_MS);
+  // 如果失败且客户端 redirectUri 与配置的默认值不同，回退到配置的默认 redirectUri
+  // 这是为了兼容工作平台使用固定回调地址发起授权的场景
+  const configuredUri = oauthConfig.redirectUri || "";
+  if (!result.ok && requestedRedirectUri && configuredUri && requestedRedirectUri !== configuredUri) {
+    // eslint-disable-next-line no-console
+    console.log(`[AUTH TOKEN] first attempt failed with redirectUri=${redirectUri} (status=${result.status}), retrying with configured=${configuredUri}`);
+    result = await exchangeOAuthToken(tokenUrl, oauthConfig, code, configuredUri);
+    if (result.ok) {
+      // eslint-disable-next-line no-console
+      console.log(`[AUTH TOKEN] retry succeeded with configured redirectUri=${configuredUri}`);
+    }
+  }
 
-  const text = await upstreamRes.text().catch(() => "");
-  if (!upstreamRes.ok) {
-    sendJson(res, upstreamRes.status, formatUpstreamError("OAuth Token 接口", upstreamRes.status, text));
+  if (!result.ok) {
+    sendJson(res, result.status, formatUpstreamError("OAuth Token 接口", result.status, result.text));
     return;
   }
 
   try {
-    const data = JSON.parse(text || "{}");
+    const data = JSON.parse(result.text || "{}");
     sendJson(res, 200, data);
   } catch {
-    sendJson(res, 200, { raw: text });
+    sendJson(res, 200, { raw: result.text });
   }
 }
 
