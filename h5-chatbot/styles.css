@@ -776,6 +776,10 @@ body::after{
   transition: transform 0.12s ease, background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
   cursor: pointer;
 }
+.composer__attach[hidden],
+.attachment-list[hidden]{
+  display: none !important;
+}
 .composer__attach:hover{
   background: #ffffff;
   color: var(--primary-strong);
