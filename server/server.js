@@ -485,6 +485,19 @@ function normalizeAuthVariant(appVariant) {
   return ["gongye", "wiki"].includes(variant) ? variant : "default";
 }
 
+/**
+ * 返回 .env 中配置的固定 redirectUri，不受客户端动态路径影响。
+ * 用于 OAuth token 交换失败时回退到注册的固定回调地址。
+ *
+ * @param {string} variant OAuth 变体标识。
+ * @returns {string} 固定配置的 redirectUri。
+ */
+function getFallbackRedirectUri(variant) {
+  if (variant === "gongye") return AUTH_GONGYE_REDIRECT_URI || AUTH_REDIRECT_URI;
+  if (variant === "wiki") return AUTH_WIKI_REDIRECT_URI || AUTH_REDIRECT_URI;
+  return AUTH_REDIRECT_URI;
+}
+
 function pickOAuthConfig(appVariant, redirectUri = "") {
   const uri = String(redirectUri || "").trim();
   const variant = uri.includes("/gongye")
@@ -2226,16 +2239,17 @@ async function handleAuthToken(req, res) {
   // 第一次尝试：使用客户端传递的 redirectUri（动态页面地址）
   let result = await exchangeOAuthToken(tokenUrl, oauthConfig, code, redirectUri);
 
-  // 如果失败且客户端 redirectUri 与配置的默认值不同，回退到配置的默认 redirectUri
-  // 这是为了兼容工作平台使用固定回调地址发起授权的场景
-  const configuredUri = oauthConfig.redirectUri || "";
-  if (!result.ok && requestedRedirectUri && configuredUri && requestedRedirectUri !== configuredUri) {
+  // 如果失败：回退到 .env 中配置的固定 redirectUri
+  // 工作平台可能使用注册的固定回调地址发起 OAuth 授权，而用户实际访问路径不同，
+  // 导致动态 redirectUri 与授权时不一致。此时用配置的固定地址重试。
+  const fallbackUri = getFallbackRedirectUri(oauthConfig.variant);
+  if (!result.ok && requestedRedirectUri && fallbackUri && requestedRedirectUri !== fallbackUri) {
     // eslint-disable-next-line no-console
-    console.log(`[AUTH TOKEN] first attempt failed with redirectUri=${redirectUri} (status=${result.status}), retrying with configured=${configuredUri}`);
-    result = await exchangeOAuthToken(tokenUrl, oauthConfig, code, configuredUri);
+    console.log(`[AUTH TOKEN] first attempt failed with redirectUri=${redirectUri} (status=${result.status}), retrying with fallback=${fallbackUri}`);
+    result = await exchangeOAuthToken(tokenUrl, oauthConfig, code, fallbackUri);
     if (result.ok) {
       // eslint-disable-next-line no-console
-      console.log(`[AUTH TOKEN] retry succeeded with configured redirectUri=${configuredUri}`);
+      console.log(`[AUTH TOKEN] retry succeeded with fallback redirectUri=${fallbackUri}`);
     }
   }
 
