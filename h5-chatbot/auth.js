@@ -179,19 +179,24 @@ async function fetchAuthUserInfo(getStoreBase, accessToken) {
  * @returns {Promise<object>} 是否成功、是否需要重新认证等结果。
  */
 export async function tryLoginWithStoredToken(ctx) {
-  const { state, getStoreBase, setTips, onUserInfo } = ctx;
+  const { state, getStoreBase, setTips, onUserInfo, onAuthLog } = ctx;
   const accessToken = String(state.auth?.accessToken || "");
   if (!accessToken) {
+    onAuthLog?.("本地Token登录", "无本地Token");
     return { ok: false, needsAuth: false, reason: "missing_token" };
   }
+  onAuthLog?.("本地Token登录", `尝试中(token长度=${accessToken.length})...`);
   const result = await fetchAuthUserInfo(getStoreBase, accessToken);
   if (result.ok) {
+    onAuthLog?.("本地Token登录", "成功");
     onUserInfo?.(result.data || {});
     return { ok: true, needsAuth: false };
   }
   if (result.status !== 200 && result.errorCode === 10011) {
+    onAuthLog?.("本地Token登录", "Token已过期(errorCode=10011)");
     return { ok: false, needsAuth: true, reason: "token_expired" };
   }
+  onAuthLog?.("本地Token登录", `失败-status=${result.status}，errorCode=${result.errorCode || "无"}，message=${result.message || "无"}`);
   setTips?.(`获取用户信息失败：${String(result.message || "")}`);
   return { ok: false, needsAuth: false, reason: "other_error" };
 }
@@ -203,14 +208,22 @@ export async function tryLoginWithStoredToken(ctx) {
  * @returns {Promise<void>}
  */
 export async function startAuthFlow(ctx) {
-  const { state, getStoreBase, setTips } = ctx;
+  const { state, getStoreBase, setTips, onAuthLog } = ctx;
   try {
+    onAuthLog?.("OAuth跳转-获取配置", "开始...");
     const cfg = await fetchAuthConfig(getStoreBase);
     const authorizeUrlBase = String(cfg?.authorizeUrlBase || "").trim();
     const clientId = String(cfg?.clientId || "").trim();
     const redirectUri = String(cfg?.redirectUri || "").trim();
     const scope = String(cfg?.scope || "").trim();
+    onAuthLog?.("OAuth跳转-配置", `authorizeUrl=${authorizeUrlBase || "空"}，clientId=${clientId ? "已配置" : "空"}，redirectUri=${redirectUri || "空"}，scope=${scope || "空"}`);
     if (!authorizeUrlBase || !clientId || !redirectUri || !scope) {
+      const missing = [];
+      if (!authorizeUrlBase) missing.push("AUTH_SERVER_DOMAIN/authorizeUrlBase");
+      if (!clientId) missing.push("AUTH_CLIENT_ID");
+      if (!redirectUri) missing.push("AUTH_REDIRECT_URI");
+      if (!scope) missing.push("AUTH_SCOPE");
+      onAuthLog?.("OAuth跳转-失败", `缺少配置：${missing.join("，")}`);
       setTips?.(
         "认证配置不完整，请检查 AUTH_SERVER_DOMAIN、AUTH_CLIENT_ID、AUTH_CLIENT_SECRET、AUTH_REDIRECT_URI",
       );
@@ -234,9 +247,11 @@ export async function startAuthFlow(ctx) {
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", scope);
     url.searchParams.set("state", stateValue);
+    onAuthLog?.("OAuth跳转", `准备跳转到 ${authorizeUrlBase}?client_id=${clientId}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=${encodeURIComponent(scope)}`);
     window.location.href = url.toString();
     return true;
   } catch (err) {
+    onAuthLog?.("OAuth跳转-异常", formatRuntimeError(err, "认证失败"));
     setTips?.(`认证失败：${formatRuntimeError(err, "认证失败")}`);
     return false;
   }
@@ -249,7 +264,7 @@ export async function startAuthFlow(ctx) {
  * @returns {boolean} 当前地址中是否包含授权码。
  */
 export async function captureAuthCodeFromUrl(ctx) {
-  const { state, getStoreBase, setTips, onUserInfo } = ctx;
+  const { state, getStoreBase, setTips, onUserInfo, onAuthLog } = ctx;
   const params = new URLSearchParams(window.location.search || "");
   const code = params.get("code");
   const returnedState = params.get("state");
@@ -261,8 +276,10 @@ export async function captureAuthCodeFromUrl(ctx) {
     saveAuthState(state.auth);
     updateAuthDisplay(ctx);
     setTips?.("认证回调校验失败：state 不一致");
+    onAuthLog?.("OAuth State校验", "失败-不一致");
     return false;
   }
+  onAuthLog?.("OAuth State校验", expectedState ? "通过" : "跳过（无本地state）");
   state.auth = {
     ...state.auth,
     code,
@@ -274,11 +291,15 @@ export async function captureAuthCodeFromUrl(ctx) {
   saveAuthState(state.auth);
   updateAuthDisplay(ctx);
   try {
+    onAuthLog?.("OAuth获取配置", "开始...");
     const cfg = await fetchAuthConfig(getStoreBase);
     const redirectUri = String(cfg?.redirectUri || "").trim();
+    onAuthLog?.("OAuth配置", `redirectUri=${redirectUri || "空"}，variant=${cfg?.variant || "default"}`);
+    onAuthLog?.("OAuth换取Token", `开始...redirectUri=${redirectUri}`);
     const data = await exchangeAuthToken(getStoreBase, code, redirectUri);
     const accessToken = String(data?.access_token || "");
     const refreshToken = String(data?.refresh_token || "");
+    onAuthLog?.("OAuth换取Token", accessToken ? `成功(token长度=${accessToken.length})` : `失败-响应中缺少access_token，原始keys=${Object.keys(data || {}).join(",") || "无"}`);
     state.auth = {
       ...state.auth,
       accessToken,
@@ -292,17 +313,24 @@ export async function captureAuthCodeFromUrl(ctx) {
     if (!accessToken) {
       throw new Error("换取 Token 失败：响应中缺少 access_token");
     }
+    onAuthLog?.("OAuth获取用户信息", "开始...");
     const result = await fetchAuthUserInfo(getStoreBase, accessToken);
     if (!result.ok) {
+      onAuthLog?.("OAuth获取用户信息", `失败-status=${result.status}，errorCode=${result.errorCode || "无"}，message=${result.message || "无"}`);
       throw new Error(`userinfo:${String(result.message || "获取用户信息失败")}`);
     }
+    const userKeys = result.data && typeof result.data === "object" ? Object.keys(result.data).slice(0, 20).join(",") : "无";
+    onAuthLog?.("OAuth获取用户信息", `成功-返回字段：${userKeys}`);
     onUserInfo?.(result.data || {});
+    onAuthLog?.("OAuth用户信息应用", "已调用");
   } catch (err) {
     const message = String(err?.message || err);
     if (message.startsWith("userinfo:")) {
       setTips?.(`获取用户信息失败：${message.slice("userinfo:".length)}`);
+      onAuthLog?.("OAuth错误", `获取用户信息失败：${message.slice("userinfo:".length)}`);
     } else {
       setTips?.(`换取 Token 失败：${message}`);
+      onAuthLog?.("OAuth错误", `换取Token失败：${message}`);
     }
     updateAuthDisplay(ctx);
   }

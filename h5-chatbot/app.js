@@ -263,7 +263,8 @@ function hasAuthenticatedUserInfo() {
   if (raw && pickPlatformUserId(raw)) return true;
   return Boolean(
     String(info.userName || info.name || "").trim() ||
-    String(info.org || info.orgName || "").trim(),
+    String(info.org || info.orgName || "").trim() ||
+    String(info.email || "").trim(),
   );
 }
 
@@ -1362,26 +1363,44 @@ function updateUserInfoDisplay() {
   if (el.userInfoPhone) el.userInfoPhone.textContent = phoneText;
 }
 /**
+ * 从用户信息对象中按优先级尝试多个字段名取值。
+ *
+ * @param {object} info 用户信息对象。
+ * @param {string[]} keys 按优先级排列的候选字段名。
+ * @returns {string} 取到的第一个非空值，或空字符串。
+ */
+function pickUserInfoField(info, keys) {
+  if (!info || typeof info !== "object") return "";
+  for (const key of keys) {
+    const value = String(info[key] ?? "").trim();
+    if (value) return value;
+  }
+  return "";
+}
+
+/**
  * 将认证接口返回的用户信息写入本地状态。
  *
  * @param {object} userInfo 认证接口返回的用户信息。
  */
 function applyUserInfoFromResponse(userInfo) {
-  const name = String(userInfo?.name || "").trim();
-  const phone = String(userInfo?.phone_number || "").trim();
-  const org = String(userInfo?.orgName || "").trim();
+  const name = pickUserInfoField(userInfo, ["name", "nickname", "userName", "username", "realName", "preferred_username", "displayName", "given_name"]);
+  const phone = pickUserInfoField(userInfo, ["phone_number", "phone", "mobile", "telephone", "tel", "cellPhone", "phoneNumber"]);
+  const org = pickUserInfoField(userInfo, ["orgName", "org", "organization", "company", "companyName", "org_name", "organizeName", "departmentName", "department", "deptName"]);
+  const email = pickUserInfoField(userInfo, ["email", "mail", "eMail"]);
   state.platformUser = {
     userName: name,
     phone,
     org,
-    orgId: String(userInfo?.orgId || "").trim(),
+    email,
+    orgId: pickUserInfoField(userInfo, ["orgId", "org_id", "orgid", "organizationId", "companyId"]),
     orgName: org,
-    departmentId: String(userInfo?.departmentId || userInfo?.deptId || "").trim(),
-    departmentName: String(userInfo?.departmentName || userInfo?.department || userInfo?.deptName || "").trim(),
+    departmentId: pickUserInfoField(userInfo, ["departmentId", "department_id", "deptId", "dept_id", "deptid"]),
+    departmentName: pickUserInfoField(userInfo, ["departmentName", "department_name", "department", "deptName", "dept_name", "dept"]),
     authSource: "oauth-userinfo",
     raw: userInfo || {},
   };
-  logAuthUserInfo("oauth-userinfo", userInfo);
+  logAuthUserInfo("oauth-userinfo", state.platformUser);
   updateUserInfoDisplay();
   if (phone) {
     state.config.userId = phone;
@@ -1401,6 +1420,7 @@ function getAuthCtx() {
     getStoreBase,
     setTips,
     onUserInfo: applyUserInfoFromResponse,
+    onAuthLog: addAccessDeniedLog,
   };
 }
 /**
@@ -2212,7 +2232,14 @@ async function bootstrap() {
   }
   if (!hasAuthenticatedUserInfo()) {
     setAccessDenied(true);
-    setTips("未获取到登录用户信息，请从已登录的工作平台入口进入。");
+    // 保留 OAuth 流程中的具体错误信息，不覆盖
+    const existingTips = String(state.lastTips || "").trim();
+    if (existingTips && existingTips !== "询问任何问题" && existingTips !== "未获取到登录用户信息，请从已登录的工作平台入口进入。") {
+      // 已有具体错误，附加引导信息
+      setTips(`${existingTips} 请检查认证配置或从已登录的工作平台入口进入。`);
+    } else {
+      setTips("未获取到登录用户信息，请从已登录的工作平台入口进入。");
+    }
     addAccessDeniedLog("最终结果", "未获取到可信用户信息");
     setAuthPending(false);
     renderAll();
