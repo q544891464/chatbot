@@ -3,32 +3,42 @@ import { safeJsonParse } from "./utils.js";
 export const LEGACY_CHAT_KEY = "h5ChatbotChat:v1";
 export const LOCAL_CONVERSATION_KEY = "h5ChatbotConversations:v1";
 
+function normalizeAttachment(attachment) {
+  return {
+    file_id: String(attachment?.file_id || attachment?.fileId || ""),
+    file_name: String(attachment?.file_name || attachment?.fileName || attachment?.name || "附件"),
+    file_type: String(attachment?.file_type || attachment?.fileType || ""),
+    file_size: Number(attachment?.file_size || attachment?.fileSize || 0),
+    status: String(attachment?.status || "parsed"),
+    uploaded_at: String(attachment?.uploaded_at || attachment?.uploadedAt || ""),
+    truncated: Boolean(attachment?.truncated),
+  };
+}
+
 export function normalizeConversation(item) {
   const now = Date.now();
   const messages = Array.isArray(item?.messages)
-    ? item.messages.map((msg) => ({
-        role: msg?.role === "assistant" ? "assistant" : "user",
-        content: String(msg?.content || ""),
-        time: String(msg?.time || ""),
-        status: msg?.status || "done",
-        feedback: String(msg?.feedback || ""),
-        feedbackReason: String(msg?.feedbackReason || ""),
-        feedbackLoaded: Boolean(msg?.feedbackLoaded),
-        externalMessageId: String(msg?.externalMessageId || ""),
-        ...(msg?.id ? { id: msg.id } : {}),
-      }))
+    ? item.messages.map((msg) => {
+        const messageAttachments = Array.isArray(msg?.attachments)
+          ? msg.attachments.map(normalizeAttachment).filter((attachment) => attachment.file_id)
+          : [];
+        return {
+          role: msg?.role === "assistant" ? "assistant" : "user",
+          content: String(msg?.content || ""),
+          time: String(msg?.time || ""),
+          status: msg?.status || "done",
+          feedback: String(msg?.feedback || ""),
+          feedbackReason: String(msg?.feedbackReason || ""),
+          feedbackLoaded: Boolean(msg?.feedbackLoaded),
+          externalMessageId: String(msg?.externalMessageId || ""),
+          ...(messageAttachments.length ? { attachments: messageAttachments } : {}),
+          ...(msg?.id ? { id: msg.id } : {}),
+        };
+      })
     : [];
   const attachments = Array.isArray(item?.attachments)
     ? item.attachments
-        .map((attachment) => ({
-          file_id: String(attachment?.file_id || attachment?.fileId || ""),
-          file_name: String(attachment?.file_name || attachment?.fileName || attachment?.name || "附件"),
-          file_type: String(attachment?.file_type || attachment?.fileType || ""),
-          file_size: Number(attachment?.file_size || attachment?.fileSize || 0),
-          status: String(attachment?.status || "parsed"),
-          uploaded_at: String(attachment?.uploaded_at || attachment?.uploadedAt || ""),
-          truncated: Boolean(attachment?.truncated),
-        }))
+        .map(normalizeAttachment)
         .filter((attachment) => attachment.file_id)
     : [];
   return {

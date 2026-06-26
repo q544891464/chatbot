@@ -8,6 +8,22 @@ function normalizeMessage(msg) {
   const externalMessageId =
     msg?.externalMessageId ?? msg?.external_message_id ?? msg?.externalMessageID;
   const base = { role, content, time };
+  const attachments = Array.isArray(msg?.attachments)
+    ? msg.attachments
+        .map((attachment) => ({
+          file_id: String(attachment?.file_id || attachment?.fileId || ""),
+          file_name: String(attachment?.file_name || attachment?.fileName || attachment?.name || "附件"),
+          file_type: String(attachment?.file_type || attachment?.fileType || ""),
+          file_size: Number(attachment?.file_size || attachment?.fileSize || 0),
+          status: String(attachment?.status || "parsed"),
+          uploaded_at: String(attachment?.uploaded_at || attachment?.uploadedAt || ""),
+          truncated: Boolean(attachment?.truncated),
+        }))
+        .filter((attachment) => attachment.file_id)
+    : [];
+  if (attachments.length) {
+    base.attachments = attachments;
+  }
   if (id !== undefined && id !== null && String(id).trim()) {
     base.id = Number.isFinite(Number(id)) ? Number(id) : String(id);
   }
@@ -168,18 +184,25 @@ function createConversationService(pool) {
       const convIds = convRows.map((row) => row.id);
       const placeholders = convIds.map(() => "?").join(",");
       const [msgRows] = await conn.query(
-        `SELECT id, conversation_id, role, content, time_label, position, external_message_id FROM messages WHERE conversation_id IN (${placeholders}) ORDER BY conversation_id, position`,
+        `SELECT id, conversation_id, role, content, time_label, position, external_message_id, metadata_json FROM messages WHERE conversation_id IN (${placeholders}) ORDER BY conversation_id, position`,
         convIds,
       );
 
       const msgMap = new Map();
       for (const row of msgRows) {
         const list = msgMap.get(row.conversation_id) || [];
+        let metadata = {};
+        try {
+          metadata = row.metadata_json ? JSON.parse(String(row.metadata_json)) : {};
+        } catch {
+          metadata = {};
+        }
         list.push({
           id: row.id,
           role: row.role === "assistant" ? "assistant" : "user",
           content: String(row.content || ""),
           time: String(row.time_label || ""),
+          attachments: Array.isArray(metadata.attachments) ? metadata.attachments : [],
           externalMessageId: row.external_message_id
             ? String(row.external_message_id)
             : "",
@@ -297,17 +320,20 @@ function createConversationService(pool) {
           const content = String(msg.content || "");
           const timeLabel = String(msg.time || "");
           const externalMessageId = msg.externalMessageId ? String(msg.externalMessageId) : null;
+          const metadataJson = JSON.stringify({
+            attachments: Array.isArray(msg.attachments) ? msg.attachments : [],
+          });
           const numericId = Number.parseInt(String(msg.id || ""), 10);
           if (Number.isFinite(numericId) && existingMessageIds.has(numericId)) {
             await conn.execute(
-              "UPDATE messages SET role = ?, content = ?, time_label = ?, position = ?, created_at_ms = ?, external_message_id = ? WHERE id = ? AND conversation_id = ?",
-              [role, content, timeLabel, idx, updatedAtMs, externalMessageId, numericId, convId],
+              "UPDATE messages SET role = ?, content = ?, time_label = ?, position = ?, created_at_ms = ?, external_message_id = ?, metadata_json = ? WHERE id = ? AND conversation_id = ?",
+              [role, content, timeLabel, idx, updatedAtMs, externalMessageId, metadataJson, numericId, convId],
             );
             keepMessageIds.push(numericId);
           } else {
             const [insertMessageResult] = await conn.execute(
-              "INSERT INTO messages (conversation_id, role, content, time_label, position, created_at_ms, external_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-              [convId, role, content, timeLabel, idx, updatedAtMs, externalMessageId],
+              "INSERT INTO messages (conversation_id, role, content, time_label, position, created_at_ms, external_message_id, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+              [convId, role, content, timeLabel, idx, updatedAtMs, externalMessageId, metadataJson],
             );
             keepMessageIds.push(insertMessageResult.insertId);
           }

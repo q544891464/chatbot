@@ -398,12 +398,18 @@ async function fetchConversationsFromServer() {
  * @returns {object} 可用于同步的会话负载。
  */
 function serializeConversation(conv) {
+  const messages = clampMessages(conv.messages || []).map((msg) => ({
+    ...msg,
+    attachments: Array.isArray(msg?.attachments)
+      ? msg.attachments.map(normalizeAttachmentForMessage).filter((item) => item.file_id)
+      : [],
+  }));
   return {
     id: String(conv.id || randomId("conv")),
     title: String(conv.title || "新对话"),
     conversationId: String(conv.conversationId || ""),
     platform: "agent",
-    messages: clampMessages(conv.messages || []),
+    messages,
     attachments: Array.isArray(conv.attachments) ? conv.attachments : [],
     createdAt: Number(conv.createdAt || Date.now()),
     updatedAt: Number(conv.updatedAt || Date.now()),
@@ -990,6 +996,7 @@ function createMessageNode(message) {
   const bubble = document.createElement("div");
   bubble.className = "msg__bubble";
   setBubbleContent(bubble, role, content || "", status);
+  const messageAttachments = createMessageAttachmentsNode(message.attachments);
   const meta = document.createElement("div");
   meta.className = "msg__meta";
   const tag = document.createElement("span");
@@ -1071,6 +1078,9 @@ function createMessageNode(message) {
     updateFeedbackState(meta, message.feedback, status);
   }
   contentWrap.appendChild(bubble);
+  if (messageAttachments) {
+    contentWrap.appendChild(messageAttachments);
+  }
   contentWrap.appendChild(meta);
   const reasonEl = document.createElement("div");
   reasonEl.className = "msg__feedback-reason";
@@ -1463,6 +1473,68 @@ function getAttachmentStatusLabel(item) {
   return "处理中";
 }
 
+function normalizeAttachmentForMessage(item) {
+  return {
+    file_id: String(item?.file_id || item?.fileId || ""),
+    file_name: String(item?.file_name || item?.fileName || item?.name || "附件"),
+    file_type: String(item?.file_type || item?.fileType || ""),
+    file_size: Number(item?.file_size || item?.fileSize || 0),
+    status: String(item?.status || "parsed"),
+    uploaded_at: String(item?.uploaded_at || item?.uploadedAt || ""),
+    truncated: Boolean(item?.truncated),
+  };
+}
+
+function getPendingAttachments() {
+  const conv = getActiveConversation();
+  return Array.isArray(conv.attachments)
+    ? conv.attachments.map(normalizeAttachmentForMessage).filter((item) => item.file_id)
+    : [];
+}
+
+function createMessageAttachmentsNode(attachments) {
+  const items = Array.isArray(attachments)
+    ? attachments.map(normalizeAttachmentForMessage).filter((item) => item.file_id)
+    : [];
+  if (!items.length) return null;
+
+  const wrap = document.createElement("div");
+  wrap.className = "msg-attachments";
+  const title = document.createElement("div");
+  title.className = "msg-attachments__title";
+  title.textContent = "已发送附件";
+  wrap.appendChild(title);
+
+  const list = document.createElement("div");
+  list.className = "msg-attachments__list";
+  for (const item of items) {
+    const chip = document.createElement("div");
+    chip.className = "msg-attachment";
+    chip.title = item.file_name || "附件";
+
+    const icon = document.createElement("span");
+    icon.className = "msg-attachment__icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "附";
+
+    const body = document.createElement("span");
+    body.className = "msg-attachment__body";
+    const name = document.createElement("span");
+    name.className = "msg-attachment__name";
+    name.textContent = item.file_name || "附件";
+    const meta = document.createElement("span");
+    meta.className = "msg-attachment__meta";
+    const size = formatAttachmentSize(item.file_size);
+    meta.textContent = size ? `${size} · ${getAttachmentStatusLabel(item)}` : getAttachmentStatusLabel(item);
+    body.append(name, meta);
+
+    chip.append(icon, body);
+    list.appendChild(chip);
+  }
+  wrap.appendChild(list);
+  return wrap;
+}
+
 function renderAttachments() {
   if (!el.attachmentBtn || !el.attachmentList) return;
   const enabled = supportsAttachmentUpload();
@@ -1579,7 +1651,6 @@ async function uploadAttachments(files) {
       renderAttachments();
       saveConversationsLocalOnly();
     }
-    await refreshActiveAttachments({ silent: true });
     setTips("附件上传成功，可直接提问。");
   } catch (err) {
     setTips(formatRuntimeError(err, "上传附件失败"));
@@ -1646,7 +1717,13 @@ async function sendMessage() {
   }
   setTips("");
   const conv = getActiveConversation();
-  const pendingUserMsg = { role: "user", content: text, time: nowTime() };
+  const sentAttachments = getPendingAttachments();
+  const pendingUserMsg = {
+    role: "user",
+    content: text,
+    time: nowTime(),
+    ...(sentAttachments.length ? { attachments: sentAttachments } : {}),
+  };
   const pendingTitle =
     conv.title === "新对话"
       ? deriveTitleFromMessages([...conv.messages, pendingUserMsg])
@@ -1669,6 +1746,10 @@ async function sendMessage() {
     conv.platform = "agent";
   }
   conv.messages.push(pendingUserMsg);
+  if (sentAttachments.length) {
+    conv.attachments = [];
+    renderAttachments();
+  }
   conv.updatedAt = Date.now();
   if (conv.title === "新对话") {
     conv.title = deriveTitleFromMessages(conv.messages);

@@ -257,6 +257,7 @@ async function ensureSchema() {
           role VARCHAR(16) NOT NULL,
           content MEDIUMTEXT NOT NULL,
           external_message_id VARCHAR(128) DEFAULT NULL,
+          metadata_json JSON DEFAULT NULL,
           time_label VARCHAR(16) NOT NULL DEFAULT '',
           position INT NOT NULL,
           created_at_ms BIGINT NOT NULL,
@@ -327,6 +328,20 @@ async function ensureSchema() {
       if (!messageCount) {
         await conn.execute(
           "ALTER TABLE messages ADD COLUMN external_message_id VARCHAR(128) DEFAULT NULL AFTER content",
+        );
+      }
+
+      const [messageMetadataRows] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'messages'
+           AND COLUMN_NAME = 'metadata_json'`,
+        [DB_NAME],
+      );
+      if (!Number(messageMetadataRows?.[0]?.count || 0)) {
+        await conn.execute(
+          "ALTER TABLE messages ADD COLUMN metadata_json JSON DEFAULT NULL AFTER external_message_id",
         );
       }
 
