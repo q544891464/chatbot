@@ -1425,12 +1425,36 @@ function supportsAttachmentUpload() {
   return state.variant?.features?.attachments === true;
 }
 
+const ATTACHMENT_MAX_FILE_BYTES = 5 * 1024 * 1024;
+const ATTACHMENT_ALLOWED_EXTENSIONS = new Set(["txt", "md", "docx", "html", "htm", "pptx"]);
+const ATTACHMENT_SUPPORT_TIP = "支持 txt/md/docx/html/pptx 格式，单个文件不超过 5 MB。";
+
 function formatAttachmentSize(size) {
   const bytes = Number(size || 0);
   if (!bytes) return "";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function getAttachmentExtension(file) {
+  const name = String(file?.name || "");
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(index + 1).toLowerCase() : "";
+}
+
+function validateAttachmentFiles(files) {
+  for (const file of files) {
+    const name = String(file?.name || "附件");
+    const ext = getAttachmentExtension(file);
+    if (!ATTACHMENT_ALLOWED_EXTENSIONS.has(ext)) {
+      return `${name} 格式不支持。${ATTACHMENT_SUPPORT_TIP}`;
+    }
+    if (Number(file?.size || 0) > ATTACHMENT_MAX_FILE_BYTES) {
+      return `${name} 超过 5 MB。${ATTACHMENT_SUPPORT_TIP}`;
+    }
+  }
+  return "";
 }
 
 function getAttachmentStatusLabel(item) {
@@ -1520,6 +1544,11 @@ async function uploadAttachments(files) {
   if (!supportsAttachmentUpload()) return;
   const items = Array.from(files || []);
   if (!items.length) return;
+  const validationError = validateAttachmentFiles(items);
+  if (validationError) {
+    setTips(validationError);
+    return;
+  }
   if (state.accessDenied) {
     setTips("未获取到登录用户信息，无法上传附件。");
     return;

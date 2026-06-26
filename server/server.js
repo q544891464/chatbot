@@ -66,6 +66,10 @@ const ALT_THREAD_TIMEOUT_MS = parseDurationMs(process.env.ALT_THREAD_TIMEOUT_MS,
 const ALT_CHAT_TIMEOUT_MS = parseDurationMs(process.env.ALT_CHAT_TIMEOUT_MS, 20_000);
 const ALT_STREAM_CONNECT_TIMEOUT_MS = parseDurationMs(process.env.ALT_STREAM_CONNECT_TIMEOUT_MS, 20_000);
 const ALT_FEEDBACK_TIMEOUT_MS = parseDurationMs(process.env.ALT_FEEDBACK_TIMEOUT_MS, 10_000);
+const ALT_ATTACHMENT_MAX_REQUEST_BYTES = Number.parseInt(
+  process.env.ALT_ATTACHMENT_MAX_REQUEST_BYTES || `${5 * 1024 * 1024 + 512 * 1024}`,
+  10,
+);
 const OAUTH_TIMEOUT_MS = parseDurationMs(process.env.OAUTH_TIMEOUT_MS, 10_000);
 const URL_ENTRY_TIMEOUT_MS = parseDurationMs(process.env.URL_ENTRY_TIMEOUT_MS, 10_000);
 const AUDIO_TO_TEXT_TIMEOUT_MS = parseDurationMs(process.env.AUDIO_TO_TEXT_TIMEOUT_MS, 60_000);
@@ -2071,6 +2075,15 @@ async function handleAltThreadAttachmentUpload(req, res, threadId) {
   const contentType = String(req.headers["content-type"] || "");
   if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
     sendJson(res, 400, { error: "附件请求格式错误，需要 multipart/form-data" });
+    return;
+  }
+
+  const contentLength = Number.parseInt(String(req.headers["content-length"] || "0"), 10);
+  if (Number.isFinite(contentLength) && contentLength > ALT_ATTACHMENT_MAX_REQUEST_BYTES) {
+    sendJson(res, 413, {
+      error: "附件过大，单个附件不能超过 5 MB。支持 txt/md/docx/html/pptx 格式。",
+      source: "attachment-limit",
+    });
     return;
   }
 
