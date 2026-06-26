@@ -12,6 +12,15 @@ function createAiWikiService(config) {
     return base ? `${base}/api/chat/thread` : "";
   }
 
+  function getThreadAttachmentUrl(threadId, fileId = "") {
+    const threadUrl = getThreadUrl();
+    const trimmedThreadId = String(threadId || "").trim();
+    if (!threadUrl || !trimmedThreadId) return "";
+    const base = `${threadUrl.replace(/\/+$/, "")}/${encodeURIComponent(trimmedThreadId)}/attachments`;
+    const trimmedFileId = String(fileId || "").trim();
+    return trimmedFileId ? `${base}/${encodeURIComponent(trimmedFileId)}` : base;
+  }
+
   function getHistoryUrl(agentId, threadId) {
     const trimmedThreadId = String(threadId || "").trim();
     if (!trimmedThreadId) return "";
@@ -35,6 +44,7 @@ function createAiWikiService(config) {
   return {
     getFeedbackUrl,
     getHistoryUrl,
+    getThreadAttachmentUrl,
     getThreadUrl,
   };
 }

@@ -36,7 +36,13 @@ import {
   updateFeedbackState,
   closeFeedbackModal,
 } from "./feedback.js";
-import { agentChatStream, createAgentThread } from "./chat-api.js";
+import {
+  agentChatStream,
+  createAgentThread,
+  deleteAgentThreadAttachment,
+  listAgentThreadAttachments,
+  uploadAgentThreadAttachment,
+} from "./chat-api.js";
 import {
   createConversation,
   createLocalConversationStorage,
@@ -77,6 +83,9 @@ const el = {
   topbarLogoImg: document.querySelector(".topbar__logo img"),
   messages: document.getElementById("messages"),
   input: document.getElementById("input"),
+  attachmentBtn: document.getElementById("attachmentBtn"),
+  attachmentInput: document.getElementById("attachmentInput"),
+  attachmentList: document.getElementById("attachmentList"),
   voiceBtn: document.getElementById("voiceBtn"),
   voiceFileInput: document.getElementById("voiceFileInput"),
   sendBtn: document.getElementById("sendBtn"),
@@ -395,6 +404,7 @@ function serializeConversation(conv) {
     conversationId: String(conv.conversationId || ""),
     platform: "agent",
     messages: clampMessages(conv.messages || []),
+    attachments: Array.isArray(conv.attachments) ? conv.attachments : [],
     createdAt: Number(conv.createdAt || Date.now()),
     updatedAt: Number(conv.updatedAt || Date.now()),
   };
@@ -598,6 +608,7 @@ async function initConversations() {
       state.conversations = data.items;
       openFreshConversation();
       renderAll();
+      refreshActiveAttachments({ silent: true });
       updateConversationList();
       updateScrollButton();
       saveConversationsToLocal({
@@ -614,6 +625,7 @@ async function initConversations() {
     state.conversations = cached.items;
     openFreshConversation();
     renderAll();
+    refreshActiveAttachments({ silent: true });
     updateConversationList();
     updateScrollButton();
   }
@@ -772,6 +784,7 @@ function selectConversation(id) {
   }
   saveConversations();
   renderAll();
+  refreshActiveAttachments({ silent: true });
   setConnHint();
   updateConversationList();
 }
@@ -1090,6 +1103,7 @@ function createMessageNode(message) {
  */
 function renderAll() {
   el.messages.innerHTML = "";
+  renderAttachments();
   if (state.accessDenied) {
     el.messages.appendChild(createAccessDeniedNode().wrap);
     updateScrollButton();
@@ -1406,6 +1420,161 @@ function getChatApiCtx() {
     variant: state.variant,
   };
 }
+
+function supportsAttachmentUpload() {
+  return state.variant?.features?.attachments === true;
+}
+
+function formatAttachmentSize(size) {
+  const bytes = Number(size || 0);
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function getAttachmentStatusLabel(item) {
+  if (item?.status === "failed") return "解析失败";
+  if (item?.status === "parsed") return item?.truncated ? "已解析(截断)" : "已解析";
+  return "处理中";
+}
+
+function renderAttachments() {
+  if (!el.attachmentBtn || !el.attachmentList) return;
+  const enabled = supportsAttachmentUpload();
+  el.attachmentBtn.hidden = !enabled;
+  if (!enabled) {
+    el.attachmentList.hidden = true;
+    el.attachmentList.innerHTML = "";
+    return;
+  }
+
+  const conv = getActiveConversation();
+  const attachments = Array.isArray(conv.attachments) ? conv.attachments : [];
+  el.attachmentList.hidden = attachments.length === 0;
+  el.attachmentList.innerHTML = "";
+
+  for (const item of attachments) {
+    const chip = document.createElement("div");
+    chip.className = "attachment-chip";
+    chip.title = item.file_name || "附件";
+
+    const name = document.createElement("span");
+    name.className = "attachment-chip__name";
+    const size = formatAttachmentSize(item.file_size);
+    name.textContent = size ? `${item.file_name} · ${size}` : item.file_name || "附件";
+
+    const status = document.createElement("span");
+    status.className = `attachment-chip__status${item.status === "failed" ? " is-failed" : ""}`;
+    status.textContent = getAttachmentStatusLabel(item);
+
+    const remove = document.createElement("button");
+    remove.className = "attachment-chip__remove";
+    remove.type = "button";
+    remove.title = "移除附件";
+    remove.setAttribute("aria-label", "移除附件");
+    remove.textContent = "×";
+    remove.addEventListener("click", () => removeAttachment(item.file_id));
+
+    chip.append(name, status, remove);
+    el.attachmentList.appendChild(chip);
+  }
+}
+
+async function ensureAgentThread(conv, title, { busy = true } = {}) {
+  if (conv.conversationId) return conv.conversationId;
+  if (busy) setBusy(true);
+  try {
+    conv.conversationId = await createAgentThread(getChatApiCtx(), title || conv.title || "新对话");
+    conv.updatedAt = Date.now();
+    if (conv.title === "新对话" && title) {
+      conv.title = title;
+    }
+    saveConversations();
+    updateConversationList();
+    return conv.conversationId;
+  } finally {
+    if (busy) setBusy(false);
+  }
+}
+
+async function refreshActiveAttachments({ silent = true } = {}) {
+  if (!supportsAttachmentUpload()) return;
+  const conv = getActiveConversation();
+  if (!conv.conversationId) {
+    conv.attachments = [];
+    renderAttachments();
+    return;
+  }
+  try {
+    const data = await listAgentThreadAttachments(getChatApiCtx(), conv.conversationId);
+    conv.attachments = data.attachments || [];
+    saveConversationsLocalOnly();
+    renderAttachments();
+  } catch (err) {
+    if (!silent) setTips(formatRuntimeError(err, "获取附件列表失败"));
+  }
+}
+
+async function uploadAttachments(files) {
+  if (!supportsAttachmentUpload()) return;
+  const items = Array.from(files || []);
+  if (!items.length) return;
+  if (state.accessDenied) {
+    setTips("未获取到登录用户信息，无法上传附件。");
+    return;
+  }
+  if (!isConfigured(state.config)) {
+    setTips("服务配置不可用，请联系管理员检查后端配置。");
+    return;
+  }
+
+  const conv = getActiveConversation();
+  const title = conv.title === "新对话" ? (items[0]?.name || "新的对话") : conv.title;
+  try {
+    await ensureAgentThread(conv, title, { busy: false });
+  } catch (err) {
+    setTips(formatRuntimeError(err, "创建对话失败，无法上传附件"));
+    return;
+  }
+
+  el.attachmentBtn.disabled = true;
+  el.attachmentBtn.classList.add("is-uploading");
+  setTips("正在上传附件...");
+  try {
+    for (const file of items) {
+      const uploaded = await uploadAgentThreadAttachment(getChatApiCtx(), conv.conversationId, file);
+      const current = Array.isArray(conv.attachments) ? conv.attachments : [];
+      conv.attachments = current.filter((item) => item.file_id !== uploaded.file_id);
+      conv.attachments.push(uploaded);
+      renderAttachments();
+      saveConversationsLocalOnly();
+    }
+    await refreshActiveAttachments({ silent: true });
+    setTips("附件上传成功，可直接提问。");
+  } catch (err) {
+    setTips(formatRuntimeError(err, "上传附件失败"));
+  } finally {
+    el.attachmentBtn.disabled = false;
+    el.attachmentBtn.classList.remove("is-uploading");
+  }
+}
+
+async function removeAttachment(fileId) {
+  if (!supportsAttachmentUpload()) return;
+  const conv = getActiveConversation();
+  const trimmed = String(fileId || "").trim();
+  if (!conv.conversationId || !trimmed) return;
+  try {
+    await deleteAgentThreadAttachment(getChatApiCtx(), conv.conversationId, trimmed);
+    conv.attachments = (conv.attachments || []).filter((item) => item.file_id !== trimmed);
+    saveConversationsLocalOnly();
+    renderAttachments();
+    setTips("附件已移除。");
+  } catch (err) {
+    setTips(formatRuntimeError(err, "删除附件失败"));
+  }
+}
 /**
  * 在请求进行中切换发送与停止按钮状态。
  *
@@ -1454,21 +1623,12 @@ async function sendMessage() {
       ? deriveTitleFromMessages([...conv.messages, pendingUserMsg])
       : conv.title;
   if (!conv.conversationId) {
-    setBusy(true);
     try {
-      conv.conversationId = await createAgentThread(getChatApiCtx(), pendingTitle);
-      conv.updatedAt = Date.now();
-      if (conv.title === "新对话") {
-        conv.title = pendingTitle;
-      }
-      saveConversations();
-      updateConversationList();
+      await ensureAgentThread(conv, pendingTitle);
     } catch (err) {
       setTips(String(err?.message || err || "无法创建对话 ID"));
-      setBusy(false);
       return;
     }
-    setBusy(false);
   }
   el.input.value = "";
   updateTextareaHeight();
@@ -1696,6 +1856,7 @@ function newChat() {
   state.activeId = conv.id;
   saveConversations();
   renderAll();
+  refreshActiveAttachments({ silent: true });
   updateScrollButton();
   updateConversationList();
 }
@@ -1730,6 +1891,16 @@ async function goBack() {
 
 // Events
 el.sendBtn.addEventListener("click", sendMessage);
+el.attachmentBtn?.addEventListener("click", () => {
+  if (!supportsAttachmentUpload()) return;
+  el.attachmentInput?.click();
+});
+el.attachmentInput?.addEventListener("change", () => {
+  const files = el.attachmentInput.files;
+  uploadAttachments(files).finally(() => {
+    el.attachmentInput.value = "";
+  });
+});
 el.voiceBtn?.addEventListener("click", () => voiceInput.toggle());
 el.voiceFileInput?.addEventListener("change", () => {
   const file = el.voiceFileInput.files?.[0];

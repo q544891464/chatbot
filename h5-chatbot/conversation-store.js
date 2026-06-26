@@ -18,12 +18,26 @@ export function normalizeConversation(item) {
         ...(msg?.id ? { id: msg.id } : {}),
       }))
     : [];
+  const attachments = Array.isArray(item?.attachments)
+    ? item.attachments
+        .map((attachment) => ({
+          file_id: String(attachment?.file_id || attachment?.fileId || ""),
+          file_name: String(attachment?.file_name || attachment?.fileName || attachment?.name || "附件"),
+          file_type: String(attachment?.file_type || attachment?.fileType || ""),
+          file_size: Number(attachment?.file_size || attachment?.fileSize || 0),
+          status: String(attachment?.status || "parsed"),
+          uploaded_at: String(attachment?.uploaded_at || attachment?.uploadedAt || ""),
+          truncated: Boolean(attachment?.truncated),
+        }))
+        .filter((attachment) => attachment.file_id)
+    : [];
   return {
     id: String(item?.id || `conv-${now}-${Math.random().toString(16).slice(2)}`),
     title: String(item?.title || "新对话"),
     conversationId: String(item?.conversationId || item?.difyConversationId || ""),
     platform: item?.platform === "dify" ? "dify" : "agent",
     messages,
+    attachments,
     createdAt: Number(item?.createdAt || now),
     updatedAt: Number(item?.updatedAt || now),
   };

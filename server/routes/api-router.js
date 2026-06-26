@@ -10,6 +10,9 @@ function createApiRouter(deps) {
     handleAltChat,
     handleAltChatStream,
     handleAltThread,
+    handleAltThreadAttachmentDelete,
+    handleAltThreadAttachmentList,
+    handleAltThreadAttachmentUpload,
     handleAudioToText,
     handleChatMessages,
     handleClientLog,
@@ -114,6 +117,24 @@ function createApiRouter(deps) {
       if (req.method === "POST" && url.pathname === "/api/alt-thread") {
         await handleAltThread(req, res);
         return;
+      }
+
+      const attachmentMatch = url.pathname.match(/^\/api\/alt-thread\/([^/]+)\/attachments(?:\/([^/]+))?$/);
+      if (attachmentMatch) {
+        const threadId = decodeURIComponent(attachmentMatch[1] || "");
+        const fileId = attachmentMatch[2] ? decodeURIComponent(attachmentMatch[2]) : "";
+        if (req.method === "POST" && !fileId) {
+          await handleAltThreadAttachmentUpload(req, res, threadId);
+          return;
+        }
+        if (req.method === "GET" && !fileId) {
+          await handleAltThreadAttachmentList(req, res, threadId);
+          return;
+        }
+        if (req.method === "DELETE" && fileId) {
+          await handleAltThreadAttachmentDelete(req, res, threadId, fileId);
+          return;
+        }
       }
 
       if (req.method === "POST" && url.pathname === "/api/audio-to-text") {

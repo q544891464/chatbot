@@ -5,6 +5,9 @@ const DEFAULT_VARIANT = {
   logo: "./static/政企AI助手logo.png",
   questionBank: "./question-bank.json",
   agentConfigId: 7,
+  features: {
+    attachments: false,
+  },
 };
 
 const VARIANTS = {
@@ -16,6 +19,9 @@ const VARIANTS = {
     logo: "./static/工业logo.png",
     questionBank: "./question-bank-gongye.json",
     agentConfigId: 6,
+    features: {
+      attachments: false,
+    },
   },
   chanshu: {
     id: "chanshu",
@@ -24,6 +30,9 @@ const VARIANTS = {
     logo: "./static/产数产品助手logo.png",
     questionBank: "./question-bank-chanshu.json",
     agentConfigId: 3,
+    features: {
+      attachments: true,
+    },
   },
 };
 

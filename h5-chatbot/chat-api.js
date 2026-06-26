@@ -110,6 +110,80 @@ export async function createAgentThread(ctx, title) {
   return threadId;
 }
 
+function normalizeAttachment(data) {
+  const item = data && typeof data === "object" ? data : {};
+  return {
+    file_id: String(item.file_id || item.fileId || ""),
+    file_name: String(item.file_name || item.fileName || item.name || "附件"),
+    file_type: String(item.file_type || item.fileType || ""),
+    file_size: Number(item.file_size || item.fileSize || 0),
+    status: String(item.status || "parsed"),
+    uploaded_at: String(item.uploaded_at || item.uploadedAt || ""),
+    truncated: Boolean(item.truncated),
+  };
+}
+
+export async function uploadAgentThreadAttachment(ctx, threadId, file) {
+  const { getStoreBase } = ctx;
+  const trimmedThreadId = String(threadId || "").trim();
+  if (!trimmedThreadId) throw new Error("上传附件失败：缺少会话 ID");
+  if (!file) throw new Error("上传附件失败：未选择文件");
+
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(
+    `${getStoreBase()}/alt-thread/${encodeURIComponent(trimmedThreadId)}/attachments`,
+    {
+      method: "POST",
+      body: form,
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await readResponseError(res, "上传附件失败"));
+  }
+  return normalizeAttachment(await res.json().catch(() => ({})));
+}
+
+export async function listAgentThreadAttachments(ctx, threadId) {
+  const { getStoreBase } = ctx;
+  const trimmedThreadId = String(threadId || "").trim();
+  if (!trimmedThreadId) return { attachments: [], limits: null };
+  const res = await fetch(
+    `${getStoreBase()}/alt-thread/${encodeURIComponent(trimmedThreadId)}/attachments`,
+    {
+      headers: { accept: "application/json" },
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await readResponseError(res, "获取附件列表失败"));
+  }
+  const data = await res.json().catch(() => ({}));
+  return {
+    attachments: Array.isArray(data?.attachments)
+      ? data.attachments.map(normalizeAttachment).filter((item) => item.file_id)
+      : [],
+    limits: data?.limits || null,
+  };
+}
+
+export async function deleteAgentThreadAttachment(ctx, threadId, fileId) {
+  const { getStoreBase } = ctx;
+  const trimmedThreadId = String(threadId || "").trim();
+  const trimmedFileId = String(fileId || "").trim();
+  if (!trimmedThreadId || !trimmedFileId) throw new Error("删除附件失败：缺少附件信息");
+  const res = await fetch(
+    `${getStoreBase()}/alt-thread/${encodeURIComponent(trimmedThreadId)}/attachments/${encodeURIComponent(trimmedFileId)}`,
+    {
+      method: "DELETE",
+      headers: { accept: "application/json" },
+    },
+  );
+  if (!res.ok) {
+    throw new Error(await readResponseError(res, "删除附件失败"));
+  }
+  return res.json().catch(() => ({}));
+}
+
 /**
  * 以阻塞方式请求聊天接口并返回完整答案。
  *

@@ -2039,6 +2039,105 @@ async function handleAltThread(req, res) {
   }
 }
 
+async function getAltThreadAttachmentAuth(res) {
+  try {
+    return await altAuthService.getToken();
+  } catch (err) {
+    sendJson(res, 500, { error: `上游认证失败：${String(err?.message || err)}`, source: "alt-auth" });
+    return "";
+  }
+}
+
+async function relayAltAttachmentJson(res, upstreamRes, label) {
+  const text = await upstreamRes.text().catch(() => "");
+  if (!upstreamRes.ok) {
+    sendJson(res, upstreamRes.status, formatUpstreamError(label, upstreamRes.status, text));
+    return;
+  }
+  try {
+    sendJson(res, 200, JSON.parse(text || "{}"));
+  } catch {
+    sendJson(res, 200, { raw: text });
+  }
+}
+
+async function handleAltThreadAttachmentUpload(req, res, threadId) {
+  const attachmentUrl = aiWikiService.getThreadAttachmentUrl(threadId);
+  if (!attachmentUrl) {
+    sendJson(res, 400, { error: "缺少上游会话 ID，无法上传附件", source: "server-config" });
+    return;
+  }
+
+  const contentType = String(req.headers["content-type"] || "");
+  if (!contentType.toLowerCase().startsWith("multipart/form-data")) {
+    sendJson(res, 400, { error: "附件请求格式错误，需要 multipart/form-data" });
+    return;
+  }
+
+  const token = await getAltThreadAttachmentAuth(res);
+  if (!token) return;
+
+  let upstreamRes;
+  try {
+    upstreamRes = await safeFetch(attachmentUrl, {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        Authorization: `Bearer ${token}`,
+        "Content-Type": contentType,
+      },
+      body: req,
+      duplex: "half",
+    }, "ALT attachment upload service", ALT_THREAD_TIMEOUT_MS);
+  } catch (err) {
+    sendJson(res, 502, {
+      error: `附件上传上游不可达：${String(err?.message || err || "")}`,
+      source: "alt-attachment",
+    });
+    return;
+  }
+
+  await relayAltAttachmentJson(res, upstreamRes, "附件上传上游");
+}
+
+async function handleAltThreadAttachmentList(req, res, threadId) {
+  const attachmentUrl = aiWikiService.getThreadAttachmentUrl(threadId);
+  if (!attachmentUrl) {
+    sendJson(res, 400, { error: "缺少上游会话 ID，无法获取附件列表", source: "server-config" });
+    return;
+  }
+  const token = await getAltThreadAttachmentAuth(res);
+  if (!token) return;
+
+  const upstreamRes = await safeFetch(attachmentUrl, {
+    method: "GET",
+    headers: {
+      accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  }, "ALT attachment list service", ALT_THREAD_TIMEOUT_MS);
+  await relayAltAttachmentJson(res, upstreamRes, "附件列表上游");
+}
+
+async function handleAltThreadAttachmentDelete(req, res, threadId, fileId) {
+  const attachmentUrl = aiWikiService.getThreadAttachmentUrl(threadId, fileId);
+  if (!attachmentUrl) {
+    sendJson(res, 400, { error: "缺少上游附件 ID，无法删除附件", source: "server-config" });
+    return;
+  }
+  const token = await getAltThreadAttachmentAuth(res);
+  if (!token) return;
+
+  const upstreamRes = await safeFetch(attachmentUrl, {
+    method: "DELETE",
+    headers: {
+      accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  }, "ALT attachment delete service", ALT_THREAD_TIMEOUT_MS);
+  await relayAltAttachmentJson(res, upstreamRes, "附件删除上游");
+}
+
 /**
  * 处理 OAuth 授权码换 token 接口。
  *
@@ -2721,6 +2820,9 @@ const server = http.createServer(createApiRouter({
   handleAltChat,
   handleAltChatStream,
   handleAltThread,
+  handleAltThreadAttachmentDelete,
+  handleAltThreadAttachmentList,
+  handleAltThreadAttachmentUpload,
   handleAudioToText,
   handleAuthToken,
   handleAuthUserInfo,
