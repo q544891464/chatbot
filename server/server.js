@@ -544,7 +544,7 @@ function pickOAuthConfig(appVariant, redirectUri = "") {
   const uri = String(redirectUri || "").trim();
   const variant = uri.includes("/gongye")
     ? "gongye"
-    : ((uri.includes("/zqai-doc") || uri.includes("/wiki")) && !uri.includes("/wiki/chatbot"))
+    : (uri.includes("/zqai-doc") || uri.includes("/wiki"))
       ? "wiki"
       : normalizeAuthVariant(appVariant);
   if (variant === "gongye") {
