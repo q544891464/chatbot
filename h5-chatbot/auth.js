@@ -289,6 +289,18 @@ export async function captureAuthCodeFromUrl(ctx) {
   const code = params.get("code");
   const returnedState = params.get("state");
   if (!code) return false;
+  if (String(state.auth?.accessToken || "")) {
+    state.auth = { ...state.auth, code: "", state: "" };
+    saveAuthState(state.auth);
+    updateAuthDisplay(ctx);
+    params.delete("code");
+    params.delete("state");
+    const query = params.toString();
+    const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", cleanUrl);
+    onAuthLog?.("OAuth回调处理", "已有本地Token，忽略可能被重复打开的回调code");
+    return false;
+  }
   const expectedState = String(state.auth?.state || "");
   if (!expectedState || !returnedState || expectedState !== returnedState) {
     console.warn("[Auth] invalid or stale OAuth callback", {
