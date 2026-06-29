@@ -5,6 +5,8 @@ node_modules/
 server/data/
 server/logs/
 .codex_tmp/
+.codex_tmp_oauth_manual.pdf
+scripts/sync-from-github.env
 chatbot-server-*.log
 response_*.json
 certs/
