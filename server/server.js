@@ -510,7 +510,7 @@ function pickOAuthConfig(appVariant, redirectUri = "") {
       variant,
       clientId: AUTH_GONGYE_CLIENT_ID || AUTH_CLIENT_ID,
       clientSecret: AUTH_GONGYE_CLIENT_SECRET || AUTH_CLIENT_SECRET,
-      redirectUri: uri || AUTH_GONGYE_REDIRECT_URI || AUTH_REDIRECT_URI,
+      redirectUri: AUTH_GONGYE_REDIRECT_URI || AUTH_REDIRECT_URI || uri,
       scope: AUTH_GONGYE_SCOPE || AUTH_SCOPE,
     };
   }
@@ -519,7 +519,7 @@ function pickOAuthConfig(appVariant, redirectUri = "") {
       variant,
       clientId: AUTH_WIKI_CLIENT_ID || AUTH_CLIENT_ID,
       clientSecret: AUTH_WIKI_CLIENT_SECRET || AUTH_CLIENT_SECRET,
-      redirectUri: uri || AUTH_WIKI_REDIRECT_URI || AUTH_REDIRECT_URI,
+      redirectUri: AUTH_WIKI_REDIRECT_URI || AUTH_REDIRECT_URI || uri,
       scope: AUTH_WIKI_SCOPE || AUTH_SCOPE,
     };
   }
@@ -527,7 +527,7 @@ function pickOAuthConfig(appVariant, redirectUri = "") {
     variant,
     clientId: AUTH_CLIENT_ID,
     clientSecret: AUTH_CLIENT_SECRET,
-    redirectUri: uri || AUTH_REDIRECT_URI,
+    redirectUri: AUTH_REDIRECT_URI || uri,
     scope: AUTH_SCOPE,
   };
 }

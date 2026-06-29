@@ -5,6 +5,25 @@ import {
 } from "./utils.js";
 
 const AUTH_STORAGE_KEY = "h5ChatbotAuth:v1";
+const AUTH_RETURN_URL_KEY = "h5ChatbotAuthReturnUrl:v1";
+
+function getCurrentReturnUrl() {
+  const params = new URLSearchParams(window.location.search || "");
+  params.delete("code");
+  params.delete("state");
+  const query = params.toString();
+  return `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash || ""}`;
+}
+
+function saveAuthReturnUrl() {
+  localStorage.setItem(AUTH_RETURN_URL_KEY, getCurrentReturnUrl());
+}
+
+function consumeAuthReturnUrl() {
+  const returnUrl = String(localStorage.getItem(AUTH_RETURN_URL_KEY) || "");
+  localStorage.removeItem(AUTH_RETURN_URL_KEY);
+  return returnUrl.startsWith("/") && !returnUrl.startsWith("//") ? returnUrl : "";
+}
 
 /**
  * 从本地存储读取 OAuth 认证状态。
@@ -239,6 +258,7 @@ export async function startAuthFlow(ctx) {
       expiresIn: 0,
       receivedAt: 0,
     };
+    saveAuthReturnUrl();
     saveAuthState(state.auth);
     updateAuthDisplay(ctx);
     const url = new URL(authorizeUrlBase);
@@ -339,6 +359,11 @@ export async function captureAuthCodeFromUrl(ctx) {
     onAuthLog?.("OAuth获取用户信息", `成功-返回字段：${userKeys}`);
     onUserInfo?.(result.data || {});
     onAuthLog?.("OAuth用户信息应用", "已调用");
+    const returnUrl = consumeAuthReturnUrl();
+    if (returnUrl && returnUrl !== getCurrentReturnUrl()) {
+      onAuthLog?.("OAuth返回入口", returnUrl);
+      window.location.replace(returnUrl);
+    }
   } catch (err) {
     const message = String(err?.message || err);
     if (message.startsWith("userinfo:")) {
