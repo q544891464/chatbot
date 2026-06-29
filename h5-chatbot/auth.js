@@ -270,16 +270,32 @@ export async function captureAuthCodeFromUrl(ctx) {
   const returnedState = params.get("state");
   if (!code) return false;
   const expectedState = String(state.auth?.state || "");
-  if (expectedState && returnedState && expectedState !== returnedState) {
-    console.warn("[Auth] state mismatch", { expectedState, returnedState });
+  if (!expectedState || !returnedState || expectedState !== returnedState) {
+    console.warn("[Auth] invalid or stale OAuth callback", {
+      hasExpectedState: Boolean(expectedState),
+      hasReturnedState: Boolean(returnedState),
+      stateMatches: Boolean(expectedState && returnedState && expectedState === returnedState),
+    });
     state.auth = { ...state.auth, code: "", state: "", receivedAt: 0 };
     saveAuthState(state.auth);
     updateAuthDisplay(ctx);
-    setTips?.("认证回调校验失败：state 不一致");
-    onAuthLog?.("OAuth State校验", "失败-不一致");
+    params.delete("code");
+    params.delete("state");
+    const query = params.toString();
+    const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", cleanUrl);
+    setTips?.("检测到已失效的认证回调，正在恢复登录...");
+    onAuthLog?.(
+      "OAuth State校验",
+      !expectedState
+        ? "失败-无本地state，可能是工作台重复打开旧回调链接"
+        : !returnedState
+          ? "失败-回调缺少state"
+          : "失败-state不一致",
+    );
     return false;
   }
-  onAuthLog?.("OAuth State校验", expectedState ? "通过" : "跳过（无本地state）");
+  onAuthLog?.("OAuth State校验", "通过");
   state.auth = {
     ...state.auth,
     code,
