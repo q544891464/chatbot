@@ -300,7 +300,17 @@ function createConversationService(pool) {
           );
         } else {
           const [insertResult] = await conn.execute(
-            "INSERT INTO conversations (user_id, app_variant, conversation_key, title, platform, dify_conversation_id, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            `INSERT INTO conversations (
+              user_id, app_variant, conversation_key, title, platform,
+              dify_conversation_id, created_at_ms, updated_at_ms
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+              title = VALUES(title),
+              platform = VALUES(platform),
+              dify_conversation_id = VALUES(dify_conversation_id),
+              created_at_ms = VALUES(created_at_ms),
+              updated_at_ms = VALUES(updated_at_ms),
+              id = LAST_INSERT_ID(id)`,
             [userId, variant, convKey, title, platform, difyConversationId, createdAtMs, updatedAtMs],
           );
           convId = insertResult.insertId;

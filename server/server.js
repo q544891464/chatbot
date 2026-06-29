@@ -360,6 +360,48 @@ async function ensureSchema() {
         );
       }
 
+      const [variantUniqueIndexRows] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'conversations'
+           AND INDEX_NAME = 'uniq_user_variant_conversation'`,
+        [DB_NAME],
+      );
+      if (!Number(variantUniqueIndexRows?.[0]?.count || 0)) {
+        await conn.execute(
+          "ALTER TABLE conversations ADD UNIQUE KEY uniq_user_variant_conversation (user_id, app_variant, conversation_key)",
+        );
+      }
+
+      const [legacyUniqueIndexRows] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'conversations'
+           AND INDEX_NAME = 'uniq_user_conversation'`,
+        [DB_NAME],
+      );
+      if (Number(legacyUniqueIndexRows?.[0]?.count || 0)) {
+        await conn.execute(
+          "ALTER TABLE conversations DROP INDEX uniq_user_conversation",
+        );
+      }
+
+      const [variantUpdatedIndexRows] = await conn.execute(
+        `SELECT COUNT(*) AS count
+         FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = ?
+           AND TABLE_NAME = 'conversations'
+           AND INDEX_NAME = 'idx_user_variant_updated'`,
+        [DB_NAME],
+      );
+      if (!Number(variantUpdatedIndexRows?.[0]?.count || 0)) {
+        await conn.execute(
+          "ALTER TABLE conversations ADD KEY idx_user_variant_updated (user_id, app_variant, updated_at_ms)",
+        );
+      }
+
       await conn.execute(
         `CREATE TABLE IF NOT EXISTS user_variant_states (
           user_id BIGINT UNSIGNED NOT NULL,
