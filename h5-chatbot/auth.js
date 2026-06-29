@@ -338,6 +338,8 @@ export async function captureAuthCodeFromUrl(ctx) {
     onAuthLog?.("OAuth换取Token", accessToken ? `成功(token长度=${accessToken.length})` : `失败-响应中缺少access_token，原始keys=${Object.keys(data || {}).join(",") || "无"}`);
     state.auth = {
       ...state.auth,
+      code: "",
+      state: "",
       accessToken,
       refreshToken,
       tokenType: String(data?.token_type || ""),
