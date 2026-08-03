@@ -27,6 +27,9 @@ async function main() {
   const data = JSON.parse(raw);
   const departments = Array.isArray(data.departments) ? data.departments : [];
   const users = Array.isArray(data.users) ? data.users : [];
+  if (!departments.length || !users.length) {
+    throw new Error("Address-book input must contain at least one department and one user");
+  }
 
   const connection = await mysql.createConnection({
     host: getEnv("DB_HOST", "127.0.0.1"),
@@ -39,6 +42,12 @@ async function main() {
 
   try {
     await connection.beginTransaction();
+    await connection.execute(
+      "CREATE TEMPORARY TABLE sync_address_book_departments (department_id VARCHAR(64) NOT NULL PRIMARY KEY) ENGINE=MEMORY",
+    );
+    await connection.execute(
+      "CREATE TEMPORARY TABLE sync_address_book_users (phone VARCHAR(32) NOT NULL PRIMARY KEY) ENGINE=MEMORY",
+    );
 
     for (const dept of departments) {
       const departmentId = String(dept.dept_id || dept.department_id || "").trim();
@@ -47,6 +56,10 @@ async function main() {
       const parentDepartmentId = dept.parent_dept_id || dept.parent_department_id || null;
       const deptPathItems = pathItems(dept.path);
       const departmentPath = departmentPathFromItems(deptPathItems, departmentName);
+      await connection.execute(
+        "INSERT IGNORE INTO sync_address_book_departments (department_id) VALUES (?)",
+        [departmentId],
+      );
       await connection.execute(
         `INSERT INTO chatbot_address_book_departments (
           department_id, department_name, parent_department_id, department_path,
@@ -83,6 +96,10 @@ async function main() {
       const deptPathItems = pathItems(user.dept_path);
       const departmentPath = departmentPathFromItems(deptPathItems, departmentName);
       await connection.execute(
+        "INSERT IGNORE INTO sync_address_book_users (phone) VALUES (?)",
+        [phone],
+      );
+      await connection.execute(
         `INSERT INTO chatbot_address_book_users (
           phone, user_name, union_id, customer_id, department_id, department_name,
           department_path, department_path_json, raw_json
@@ -112,6 +129,19 @@ async function main() {
       importedUsers += 1;
     }
 
+    const [deletedUsers] = await connection.execute(
+      `DELETE abu
+         FROM chatbot_address_book_users abu
+         LEFT JOIN sync_address_book_users synced ON synced.phone = abu.phone
+        WHERE synced.phone IS NULL`,
+    );
+    const [deletedDepartments] = await connection.execute(
+      `DELETE abd
+         FROM chatbot_address_book_departments abd
+         LEFT JOIN sync_address_book_departments synced ON synced.department_id = abd.department_id
+        WHERE synced.department_id IS NULL`,
+    );
+
     const [updateResult] = await connection.execute(
       `UPDATE users u
        JOIN chatbot_address_book_users abu ON abu.phone = u.phone OR abu.phone = u.user_key
@@ -131,6 +161,8 @@ async function main() {
       inputFile,
       departments: departments.length,
       users: importedUsers,
+      deletedDepartments: deletedDepartments.affectedRows || 0,
+      deletedUsers: deletedUsers.affectedRows || 0,
       updatedChatbotUsers: updateResult.affectedRows || 0,
     }, null, 2) + "\n");
   } catch (err) {
