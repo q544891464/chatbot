@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Chatbot address-book synchronization every week
+
+[Timer]
+OnCalendar=Sun *-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=10min
+Unit=chatbot-address-book-sync.service
+
+[Install]
+WantedBy=timers.target

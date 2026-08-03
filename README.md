@@ -2,6 +2,8 @@
 
 这是一个面向移动端优先场景的 H5 聊天助手项目。当前主链路为：
 
+组织通讯录的定时更新方式见 [OpenAPI 通讯录同步](docs/address-book-sync.md)。
+
 - 前端：`h5-chatbot`
 - 代理服务：`server`
 - 会话存储：MySQL

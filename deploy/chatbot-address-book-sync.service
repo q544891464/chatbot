@@ -1,0 +1,15 @@
+[Unit]
+Description=Chatbot OpenAPI address-book synchronization
+After=network-online.target mysql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/opt/chatbot
+Environment=PATH=/root/.nvm/versions/node/v22.12.0/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/chatbot/scripts/sync-address-book.sh
+TimeoutStartSec=20min
+StandardOutput=journal
+StandardError=journal
